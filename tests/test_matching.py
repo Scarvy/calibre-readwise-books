@@ -184,3 +184,22 @@ def test_read_calibre_books(library):
         CalibreBook(13, "Interaction Design", ("Yvonne Rogers", "Helen Sharp")),
     ]
     assert [b.calibre_id for b in read_calibre_books(library, [13])] == [13]
+
+
+def test_live_copy_wins_over_a_deleted_duplicate():
+    deleted = {"id": 3843, "status": "deleted", "product": {"isbn": "9780063286368"}}
+    finished = {"id": 4004, "status": "finished", "product": {"isbn": "9780063286368"}}
+
+    [match] = plan_matches(
+        [
+            book(
+                7,
+                "A Brief History of Intelligence",
+                ["Max S. Bennett"],
+                isbn="9780063286368",
+            )
+        ],
+        [deleted, finished],
+    )
+
+    assert match.bookwise_id == 4004

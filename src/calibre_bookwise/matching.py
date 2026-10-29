@@ -107,7 +107,9 @@ def plan_matches(
     product with isbn/asin). Nothing here calls the API.
     """
     saved = saved or {}
-    remote = list(bookwise_books)
+    # Readwise can hold the same book twice, e.g. a finished copy and a deleted
+    # one; put deleted books last so a live copy wins the match.
+    remote = sorted(bookwise_books, key=lambda b: b.get("status") == "deleted")
     by_id = {b["id"]: b for b in remote}
     by_isbn, by_asin = {}, {}
     for b in remote:

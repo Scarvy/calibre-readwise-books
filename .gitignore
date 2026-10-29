@@ -20,4 +20,5 @@ logger/logs/
 # Readwise library snapshots: personal data, used for dry runs.
 snapshots/
 
+# Local secrets (Readwise token for testing).
 .env
