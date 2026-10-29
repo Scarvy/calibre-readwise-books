@@ -81,7 +81,9 @@ calibre-customize -r "Bookwise Sessions"         # uninstall
 
 Data lives in Calibre's settings folder, not this repo: `~/Library/Preferences/calibre/plugins/bookwise_sessions/` holds `events.jsonl` (saves, focus changes, manual ends), `sessions.jsonl` (finished sessions, the upload queue) and `state.json`.
 
-A session finishes once it can't grow any more: idle past the dwell limit (10 min), a later session of the same book started, or **End session now**. Sessions under a minute are kept but marked `skipped`.
+A session finishes once it can't grow any more: its viewer window closed, idle past the dwell limit (10 min), a later session of the same book started, or **End session now**. Sessions under a minute are kept but marked `skipped`.
+
+Close detection (macOS) tracks viewer **window ids**, not counts: a minimized window or one on another Space is off screen but keeps its id; only closing removes it (checked 2026-10-29). Closing saves the position just before the window goes, so a closed window ends the session of the book with the most recent save, which handles two books open at once. The check takes ~150 ms, so the plugin polls on a background thread.
 
 ## Plugin requirements (not built yet)
 

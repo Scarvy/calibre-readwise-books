@@ -2,9 +2,10 @@
 
 Each poll:
 1. notices viewer position saves (annots/<sha256(book path)>.json changing),
-2. while a session is open, records whether the viewer has focus (macOS),
+2. while a session is open, checks the viewer (macOS): whether it has focus,
+   and whether a viewer window closed, which ends that book's session,
 3. finishes sessions that can no longer continue: idle past the dwell limit,
-   or ended manually, and appends them to the sessions queue.
+   viewer window closed, or ended manually, into the sessions queue.
 
 Everything is kept in the data directory, so nothing is lost if Calibre quits:
   events.jsonl    saves, focus changes and manual ends (the logger's format)
@@ -14,11 +15,11 @@ Stdlib only: this has to run inside Calibre's bundled Python 3.11.
 """
 
 import json
-import re
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -33,14 +34,28 @@ from .sessions import (
 )
 
 # Viewer opened from the Calibre app, and from the command line (macOS).
-VIEWER_EXECUTABLES = (
-    "/Applications/calibre.app/Contents/ebook-viewer.app/Contents/MacOS/calibre-parallel",
-    "/Applications/calibre.app/Contents/MacOS/ebook-viewer",
+VIEWER_EXECUTABLE_SUFFIXES = (
+    "/ebook-viewer.app/Contents/MacOS/calibre-parallel",
+    "/MacOS/ebook-viewer",
 )
+# Closing a book saves its position just before the window goes; a save this
+# recent when a window disappears identifies the book that was closed.
+CLOSE_SAVE_WINDOW = timedelta(seconds=8)
+
+
+@dataclass(frozen=True)
+class ViewerState:
+    """What the viewer looks like right now (see macos_viewer_state)."""
+
+    focused: bool  # a viewer window is the frontmost app
+    onscreen: frozenset[int] = field(default_factory=frozenset)  # window ids
+    # Every viewer window id, including minimized and other-Space windows.
+    existing: frozenset[int] = field(default_factory=frozenset)
+
 
 BookLookup = Callable[[str], dict | None]  # annots key -> {book_id, title, path}
 ProgressOf = Callable[[str | None, str | None], float | None]  # (path, cfi) -> 0-1
-FocusProbe = Callable[[], bool | None]  # viewer has focus? None = unknown
+ViewerProbe = Callable[[], ViewerState | None]  # None = unknown (e.g. not macOS)
 
 
 def utc_now() -> datetime:
@@ -54,7 +69,7 @@ class Tracker:
         annots_dir: Path,
         book_lookup: BookLookup,
         progress_of: ProgressOf | None = None,
-        focus_probe: FocusProbe | None = None,
+        viewer_probe: ViewerProbe | None = None,
         clock: Callable[[], datetime] = utc_now,
         idle_limit: timedelta = DEFAULT_IDLE_LIMIT,
         dwell_limit: timedelta = DEFAULT_DWELL_LIMIT,
@@ -63,7 +78,7 @@ class Tracker:
         self.annots_dir = annots_dir
         self.book_lookup = book_lookup
         self.progress_of = _remembered(progress_of) if progress_of else None
-        self.focus_probe = focus_probe
+        self.viewer_probe = viewer_probe
         self.clock = clock
         self.idle_limit = idle_limit
         self.dwell_limit = dwell_limit
@@ -78,13 +93,21 @@ class Tracker:
         self.finished_until: dict[str, str] = self._read_state().get(
             "finished_until", {}
         )
+        # poll() runs on a background thread in the plugin; the UI reads too.
+        self.lock = threading.RLock()
         self.focused: bool | None = None
+        # Ids of viewer windows seen on screen while a session was open.
+        self.windows: set[int] = set()
         # Baseline: positions already saved before tracking started aren't reading.
         self.mtimes = {f: f.stat().st_mtime for f in self._annots_files()}
         self.positions = {f.stem: _last_read(f).get("timestamp") for f in self.mtimes}
 
     def poll(self) -> list[dict]:
         """Run one tracking step; returns sessions finished by this step."""
+        with self.lock:
+            return self._poll()
+
+    def _poll(self) -> list[dict]:
         now = self.clock()
         for annots_file in self._annots_files():
             mtime = annots_file.stat().st_mtime
@@ -92,55 +115,97 @@ class Tracker:
                 continue
             self.mtimes[annots_file] = mtime
             self._record_save(annots_file, now)
-        if self.open_sessions():
-            self._record_focus(now)
-        else:
+        open_sessions = self.open_sessions()
+        if not open_sessions:
             self.focused = None  # unknown until the next session starts
+            self.windows = set()
+        elif self.viewer_probe is not None and (state := self.viewer_probe()):
+            # A new session's focus is dated to its start, so a dwell straight
+            # after opening the book is recognised.
+            start = min(session.start for session in open_sessions)
+            self._record_focus(
+                now if self.focused is not None else min(now, start), state.focused
+            )
+            self._check_windows(now, state, open_sessions)
         return self._finish(now)
 
     def end_session(self) -> list[dict]:
         """Manually end every open session now; returns the finished sessions."""
-        now = self.clock()
-        self._append_event({"at": now.isoformat(), "event": "session_ended"})
-        return self._finish(now)
+        with self.lock:
+            now = self.clock()
+            self._append_event({"at": now.isoformat(), "event": "session_ended"})
+            return self._finish(now)
 
     def open_sessions(self) -> list[Session]:
         """Sessions that are still in progress (not yet finished)."""
-        return self._sessions()
+        with self.lock:
+            return self._sessions()
 
     def finished_sessions(self) -> list[dict]:
-        return _read_jsonl(self.sessions_path)
+        with self.lock:
+            return _read_jsonl(self.sessions_path)
 
     def _sessions(self) -> list[Session]:
-        saves = [
-            save
-            for save in saves_from_events(self.events, progress_of=self.progress_of)
-            if save.book_key not in self.finished_until
-            or save.at > datetime.fromisoformat(self.finished_until[save.book_key])
-        ]
-        if not saves:
-            return []
-        return build_sessions(
-            saves,
-            self.idle_limit,
-            focus=focus_from_events(self.events),
-            dwell_limit=self.dwell_limit,
-            ends=self._manual_ends(),
-        )
+        by_book: dict[str, list] = {}
+        for save in saves_from_events(self.events, progress_of=self.progress_of):
+            done = self.finished_until.get(save.book_key)
+            if done is None or save.at > datetime.fromisoformat(done):
+                by_book.setdefault(save.book_key, []).append(save)
+        focus = focus_from_events(self.events)
+        sessions = []
+        for key, saves in by_book.items():
+            sessions += build_sessions(
+                saves,
+                self.idle_limit,
+                focus=focus,
+                dwell_limit=self.dwell_limit,
+                ends=self._ends_for(key),
+            )
+        return sorted(sessions, key=lambda session: session.start)
 
-    def _manual_ends(self) -> list[datetime]:
+    def _ends_for(self, key: str) -> list[datetime]:
+        """Times sessions of this book were ended: manually, or by closing it."""
         return [
             datetime.fromisoformat(event["at"])
             for event in self.events
             if event.get("event") == "session_ended"
+            and ("keys" not in event or key in event["keys"])
         ]
 
+    def _check_windows(
+        self, now: datetime, state: ViewerState, open_sessions: list[Session]
+    ):
+        """End the session of a book whose viewer window has closed."""
+        closed = self.windows - state.existing
+        self.windows = (self.windows & state.existing) | state.onscreen
+        if not closed:
+            return
+        # Each closed window is the book with the most recent (close) save.
+        recent = sorted(
+            (s for s in open_sessions if now - s.end <= CLOSE_SAVE_WINDOW),
+            key=lambda s: s.end,
+            reverse=True,
+        )
+        keys = {s.book_key for s in recent[: len(closed)]}
+        if not keys and not self.windows:
+            keys = {s.book_key for s in open_sessions}  # last window gone
+        if keys:
+            self._append_event(
+                {
+                    "at": now.isoformat(),
+                    "event": "session_ended",
+                    "reason": "viewer_closed",
+                    "keys": sorted(keys),
+                }
+            )
+
     def _finish(self, now: datetime) -> list[dict]:
-        ends = self._manual_ends()
         finished = []
         sessions = self._sessions()
         for session in sessions:
-            ended_manually = any(end >= session.end for end in ends)
+            ended_manually = any(
+                end >= session.end for end in self._ends_for(session.book_key)
+            )
             superseded = any(
                 other.book_key == session.book_key and other.start > session.end
                 for other in sessions
@@ -177,16 +242,9 @@ class Tracker:
                 "path": book.get("path"),
             }
         )
-        if self.focused is None:
-            # First save of a session: date the focus state to the save itself,
-            # so a dwell straight after opening the book is recognised.
-            self._record_focus(min(now, datetime.fromisoformat(timestamp)))
 
-    def _record_focus(self, at: datetime):
-        if self.focus_probe is None:
-            return
-        focused = self.focus_probe()
-        if focused is None or focused == self.focused:
+    def _record_focus(self, at: datetime, focused: bool):
+        if focused == self.focused:
             return
         self.focused = focused
         self._append_event(
@@ -283,15 +341,48 @@ def _run(args: list[str]) -> str:
         return ""
 
 
-def macos_viewer_focused() -> bool | None:
-    """Whether a Calibre e-book viewer is the frontmost app; None off macOS."""
+VIEWER_STATE_JXA = """
+ObjC.import("AppKit");
+ObjC.import("CoreGraphics");
+function run(argv) {
+  const pids = argv.map(Number);
+  const front = $.NSWorkspace.sharedWorkspace.frontmostApplication;
+  const windows = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(
+    $.kCGWindowListOptionAll | $.kCGWindowListExcludeDesktopElements, 0)));
+  const mine = windows.filter(w => w.kCGWindowLayer === 0 && pids.includes(w.kCGWindowOwnerPID));
+  return JSON.stringify({
+    front: front.isNil() ? null : front.processIdentifier,
+    onscreen: mine.filter(w => w.kCGWindowIsOnscreen).map(w => w.kCGWindowNumber),
+    existing: mine.map(w => w.kCGWindowNumber),
+  });
+}
+"""
+
+
+def macos_viewer_state() -> ViewerState | None:
+    """Viewer focus and window ids; None off macOS or if the probe fails.
+
+    Window ids rather than counts: a minimized window (or one on another
+    Space) is off screen but keeps its id; only a closed window loses it.
+    """
     if sys.platform != "darwin":
         return None
-    front = _run(["lsappinfo", "front"]).strip()
-    match = re.search(
-        r'"pid"=(\d+)', _run(["lsappinfo", "info", "-only", "pid", front])
-    )
-    if not front or not match:
+    pids = [
+        pid
+        for pid, _, command in (
+            line.strip().partition(" ")
+            for line in _run(["ps", "-axo", "pid=,comm="]).splitlines()
+        )
+        if command.strip().endswith(VIEWER_EXECUTABLE_SUFFIXES)
+    ]
+    try:
+        found = json.loads(
+            _run(["osascript", "-l", "JavaScript", "-e", VIEWER_STATE_JXA, *pids])
+        )
+    except ValueError:
         return None
-    command = _run(["ps", "-o", "comm=", "-p", match.group(1)]).strip()
-    return command in VIEWER_EXECUTABLES
+    return ViewerState(
+        focused=str(found["front"]) in pids,
+        onscreen=frozenset(found["onscreen"]),
+        existing=frozenset(found["existing"]),
+    )

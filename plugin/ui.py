@@ -7,6 +7,7 @@ Record only: nothing is sent anywhere.
 
 import hashlib
 import json
+import threading
 import traceback
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from calibre_plugins.bookwise_sessions.bookwise import (
 )
 from calibre_plugins.bookwise_sessions.live import (
     Tracker,
-    macos_viewer_focused,
+    macos_viewer_state,
     session_from_record,
 )
 from calibre_plugins.bookwise_sessions.progress import book_progress
@@ -62,6 +63,7 @@ class BookwiseSessionsAction(InterfaceAction):
         self.books: dict[str, dict] = {}
         self.dialog = None
         self.poll_failed = False
+        self.polling = False
         menu = QMenu(self.gui)
         menu.addAction("Show sessions", self.show_sessions)
         menu.addAction("End session now", self.end_session)
@@ -79,7 +81,7 @@ class BookwiseSessionsAction(InterfaceAction):
             ANNOTS_DIR,
             book_lookup=self.lookup_book,
             progress_of=lambda path, cfi: book_progress(path, cfi, VIEWER_CACHE),
-            focus_probe=macos_viewer_focused,
+            viewer_probe=macos_viewer_state,
         )
         self.timer.start(POLL_MS)
 
@@ -109,18 +111,30 @@ class BookwiseSessionsAction(InterfaceAction):
         return self.books.get(key)
 
     def poll(self):
+        """Every 2 seconds: run a tracker step off the GUI thread.
+
+        The viewer check shells out to macOS (~150 ms), which would make the
+        Calibre window stutter if it ran here.
+        """
         if self.tracker is None:
             return
+        if not self.polling:
+            self.polling = True
+            threading.Thread(target=self._poll_in_background, daemon=True).start()
+        if self.dialog is not None and self.dialog.isVisible():
+            self.dialog.refresh()
+
+    def _poll_in_background(self):
         try:
             self.tracker.poll()
             self.poll_failed = False
-        # A tracker bug must never break Calibre's timer: log it and keep going.
+        # A tracker bug must never break the plugin: log it once and keep going.
         except Exception:  # noqa: BLE001
-            if not self.poll_failed:  # report once, not every two seconds
+            if not self.poll_failed:
                 traceback.print_exc()
             self.poll_failed = True
-        if self.dialog is not None and self.dialog.isVisible():
-            self.dialog.refresh()
+        finally:
+            self.polling = False
 
     def end_session(self):
         if self.tracker is not None:
