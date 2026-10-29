@@ -12,6 +12,7 @@ dependencies = []
 
 [project.scripts]
 calibre-bookwise-report = "calibre_bookwise.report:main"
+calibre-bookwise-match = "calibre_bookwise.match_report:main"
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]

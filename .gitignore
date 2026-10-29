@@ -16,3 +16,6 @@ logger/logs/
 
 # macOS
 .DS_Store
+
+# Readwise library snapshots: personal data, used for dry runs.
+snapshots/

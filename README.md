@@ -37,6 +37,16 @@ The saved position is an EPUB CFI such as `epubcfi(/22/2/4/2[id]/130/2[id]:58)`.
 
 Chapters are weighted by the lengths Calibre's viewer stores in its cache (`~/Library/Caches/calibre/ev2`, found via `metadata.json` by book path), so the % matches what the viewer shows. Calibre counts each image as roughly 1000 characters, so plain text weighting reads low on figure-heavy books. Checked 2026-10-29 on *Design for Developers*: the viewer showed 33%, cache-weighted gave 32.3%, text-only gave 29.0%. Without a matching cache entry, chapters are weighted by text length.
 
+## Book matching (`src/calibre_bookwise/matching.py`)
+
+Sessions need a Bookwise book id. Each Calibre book (title, authors, ISBN/ASIN from `metadata.db`) is matched in order: a saved mapping, ISBN (normalised to ISBN-13), ASIN, then main title plus an author surname. Bookwise often shortens titles ("JavaScript" for *JavaScript: The Good Parts*, "Code Complete" for *Code Complete, 2nd Edition*), so exact titles would miss. Unmatched books are planned as `books_create_books` items with status `currently_reading`: by ISBN, else ASIN, else title + author. Books with none of those can't be created.
+
+Dry run, nothing sent (the Bookwise side is a saved `books_list_books` result in the git-ignored `snapshots/`):
+
+```sh
+uv run calibre-bookwise-match --snapshot snapshots/bookwise-library.json [CALIBRE_ID ...]
+```
+
 ## Collecting data
 
 ```sh
