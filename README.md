@@ -71,15 +71,15 @@ Open books from the Calibre library so they map to library IDs. Use one label pe
 
 ## Calibre plugin v0 (record only)
 
-The plugin runs the live tracker (`src/calibre_bookwise/live.py`) inside Calibre, polling the viewer's saved positions every 2 seconds. It adds a **Bookwise** toolbar button with **Show sessions**, **End session now** and **Open data folder**. The sessions window lists in-progress and finished sessions with the Bookwise payload each would send. Nothing is sent anywhere.
+The plugin runs the live tracker (`src/calibre_bookwise/live.py`) inside Calibre, polling the viewer's saved positions every 2 seconds. It adds a **Readwise Books** toolbar button (icon: the Bookwise app icon, `plugin/images/readwise-books.png`) with **Show sessions**, **End session now** and **Open data folder**. The sessions window lists in-progress and finished sessions with the Bookwise payload each would send. Nothing is sent anywhere.
 
 ```sh
-uv run python scripts/build_plugin.py            # -> dist/bookwise-sessions.zip
-calibre-customize -a dist/bookwise-sessions.zip  # install, then restart Calibre
-calibre-customize -r "Bookwise Sessions"         # uninstall
+uv run python scripts/build_plugin.py         # -> dist/readwise-books.zip
+calibre-customize -a dist/readwise-books.zip  # install, then restart Calibre
+calibre-customize -r "Readwise Books"         # uninstall
 ```
 
-Data lives in Calibre's settings folder, not this repo: `~/Library/Preferences/calibre/plugins/bookwise_sessions/` holds `events.jsonl` (saves, focus changes, manual ends), `sessions.jsonl` (finished sessions, the upload queue) and `state.json`.
+Data lives in Calibre's settings folder, not this repo: `~/Library/Preferences/calibre/plugins/readwise_books/` holds `events.jsonl` (saves, focus changes, manual ends), `sessions.jsonl` (finished sessions, the upload queue) and `state.json`.
 
 A session finishes once it can't grow any more: its viewer window closed, idle past the dwell limit (10 min), a later session of the same book started, or **End session now**. Sessions under a minute are kept but marked `skipped`.
 

@@ -31,3 +31,4 @@ include = ["plugin/**"]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"
+unresolved-reference = "ignore"  # get_icons, injected by Calibre

@@ -1,4 +1,4 @@
-"""Bookwise Sessions toolbar action: runs the session tracker inside Calibre.
+"""Readwise Books toolbar action: runs the session tracker inside Calibre.
 
 Polls the e-book viewer's saved positions every few seconds (see live.py)
 and shows recorded sessions with the Bookwise payload each would send.
@@ -14,17 +14,17 @@ from pathlib import Path
 from calibre.constants import cache_dir, config_dir
 from calibre.gui2 import open_local_file
 from calibre.gui2.actions import InterfaceAction
-from calibre_plugins.bookwise_sessions.bookwise import (
+from calibre_plugins.readwise_books.bookwise import (
     local_timezone,
     session_item,
     skip_reason,
 )
-from calibre_plugins.bookwise_sessions.live import (
+from calibre_plugins.readwise_books.live import (
     Tracker,
     macos_viewer_state,
     session_from_record,
 )
-from calibre_plugins.bookwise_sessions.progress import book_progress
+from calibre_plugins.readwise_books.progress import book_progress
 from qt.core import (
     QAbstractItemView,
     QDialog,
@@ -42,17 +42,20 @@ from qt.core import (
 )
 
 POLL_MS = 2000
-DATA_DIR = Path(config_dir) / "plugins" / "bookwise_sessions"
+ICON = "images/readwise-books.png"
+DATA_DIR = Path(config_dir) / "plugins" / "readwise_books"
+# Where sessions were kept while the plugin was called Bookwise Sessions.
+OLD_DATA_DIR = Path(config_dir) / "plugins" / "bookwise_sessions"
 ANNOTS_DIR = Path(config_dir) / "viewer" / "annots"
 VIEWER_CACHE = Path(cache_dir()) / "ev2"
 
 
-class BookwiseSessionsAction(InterfaceAction):
-    name = "Bookwise Sessions"
+class ReadwiseBooksAction(InterfaceAction):
+    name = "Readwise Books"
     action_spec = (
-        "Bookwise",
-        "view.png",
-        "Reading sessions for Readwise Bookwise",
+        "Readwise Books",
+        None,  # icon set in genesis from the plugin's own images/
+        "Reading sessions for Readwise Books",
         None,
     )
     action_type = "current"
@@ -64,6 +67,8 @@ class BookwiseSessionsAction(InterfaceAction):
         self.dialog = None
         self.poll_failed = False
         self.polling = False
+        # get_icons is provided by Calibre to plugin code at runtime.
+        self.qaction.setIcon(get_icons(ICON, "Readwise Books"))  # noqa: F821
         menu = QMenu(self.gui)
         menu.addAction("Show sessions", self.show_sessions)
         menu.addAction("End session now", self.end_session)
@@ -75,6 +80,8 @@ class BookwiseSessionsAction(InterfaceAction):
         self.timer.timeout.connect(self.poll)
 
     def initialization_complete(self):
+        if OLD_DATA_DIR.is_dir() and not DATA_DIR.exists():
+            OLD_DATA_DIR.rename(DATA_DIR)  # keep sessions recorded before the rename
         self.index_library()
         self.tracker = Tracker(
             DATA_DIR,
@@ -155,11 +162,11 @@ class BookwiseSessionsAction(InterfaceAction):
 class SessionsDialog(QDialog):
     COLUMNS = ("Book", "Started", "Length", "Progress", "Pages", "Status")
 
-    def __init__(self, parent, action: BookwiseSessionsAction):
+    def __init__(self, parent, action: ReadwiseBooksAction):
         super().__init__(parent)
         self.action = action
         self.rows: list[dict] = []
-        self.setWindowTitle("Bookwise reading sessions")
+        self.setWindowTitle("Readwise Books: reading sessions")
         self.resize(820, 520)
 
         self.table = QTableWidget(0, len(self.COLUMNS), self)
