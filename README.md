@@ -69,6 +69,12 @@ Open books from the Calibre library so they map to library IDs. Use one label pe
 | `pdf`           | Read a PDF from the library                             | Whether PDFs save positions the same way         |
 | `sleep`         | Close the laptop lid or lock the screen mid-session     | Wake behaviour and timestamp gaps                |
 
+## Plugin requirements (not built yet)
+
+- **Manual "End session"**: a plugin menu action that ends the current session immediately instead of waiting for the idle limit or the book closing. In `build_sessions` this is a forced split: a list of end times, alongside the focus changes, where a session always ends. The next page turn starts a new session.
+- Create a Bookwise book only when it gets its first session, not for the whole library.
+- Watch the viewer's `annots/` files live (as `logger/watch_viewer.py` does) and close a session once it passes the idle limit or the book closes.
+
 ## Layout
 
 - `logger/watch_viewer.py`: standalone, read-only logger (PEP 723 script, stdlib only)
