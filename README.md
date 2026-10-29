@@ -1,0 +1,63 @@
+# calibre-bookwise
+
+Goal: record reading done in Calibre's e-book viewer as Readwise Bookwise reading sessions.
+
+Current stage: collecting logs from real reading to settle the session rules. There's no Readwise API code yet.
+
+## What we know (Calibre 8.14, macOS)
+
+- The viewer writes one file per book: `~/Library/Preferences/calibre/viewer/annots/<sha256(book file path)>.json`. It holds highlights plus a single `last-read` entry (`pos` as an EPUB CFI, `timestamp`), overwritten on each save.
+- **The position is saved on every page turn (1–4s after it), when a book opens, and when it closes. Idle time produces no saves.** First test, 2026-10-28: 14 saves with gaps matching the page turns exactly, and none during 75s idle or 30s in Finder.
+- Some EPUBs carry an old position in `META-INF/calibre_bookmarks.txt`. The viewer imports it on first open with its **original** timestamp (seen: April 2025), so saves timestamped minutes or more before the logger saw them are dropped as stale.
+- The library's `metadata.db` has no `last-read` rows. The book ID comes from the `(N)` suffix on the book's folder.
+- The viewer's process doesn't reliably mean a book is open. A viewer launched from the Calibre app runs as `ebook-viewer.app/.../calibre-parallel` and can outlive its window, so the logger counts viewer windows instead.
+- Calibre 8.14 has no `reading_progress()` template function and no reading-progress column.
+- Calibre bundles Python 3.11, so the code here targets 3.11 and uses only the standard library.
+
+## Scenario results (2026-10-28, scripted with `logger/scenarios.sh`, books opened via the Calibre app)
+
+| Scenario | Result with 5-min idle limit |
+|---|---|
+| two books | Each book in its own viewer process and window; saves stay per book, so two correct sessions. Paging back gives falling progress (93% → 71%). |
+| normal read | Page turns 30–73s apart: one 8:40 session, as expected. |
+| long dwell | 7 min on one page: one 8:55 session with the dwell rule (without it, two sessions and the dwell time lost). |
+| away and back | 15 min in Finder correctly split it into two sessions. |
+
+Open issues:
+- Progress can go down (paging back, jumps). Check how Readwise treats an end progress lower than the start.
+- Progress moves by chapter, so 10 page turns can show as 13% → 15%.
+
+## Session rule (`src/calibre_bookwise/sessions.py`)
+
+A session is a run of saves for one book, with no gap longer than the idle limit (default 5 minutes). A longer gap still counts as reading (a slow page) if it's within the dwell limit (default 10 minutes) and the viewer kept focus throughout, allowing up to 30s unfocused for blips. Logs without focus data use the idle limit alone. Start and end progress come from the first and last saves that have one. The open questions below decide whether this rule holds up.
+
+## Collecting data
+
+```sh
+uv run logger/watch_viewer.py --label "long dwell"   # Ctrl-C to stop
+uv run calibre-bookwise-report logger/logs/*.jsonl   # sessions per log
+uv run calibre-bookwise-report logger/logs/*.jsonl --idle-minutes 2 --dwell-minutes 0   # compare limits
+```
+
+Open books from the Calibre library so they map to library IDs. Use one label per scenario:
+
+| Label           | What to do                                              | What it tells us                                 |
+| --------------- | ------------------------------------------------------- | ------------------------------------------------ |
+| `normal read`   | Read 15–20 min as usual                                 | Real gaps between page turns                     |
+| `long dwell`    | Stay on one dense page or figure for 6+ min             | Whether a 5-min idle limit splits real reading   |
+| `away and back` | Read, leave the viewer open 20+ min, come back and read | Whether the split lands in the right place       |
+| `two books`     | Alternate between two books (two windows)               | Per-book separation, window events               |
+| `scroll mode`   | Switch the viewer to flow/scroll mode and scroll        | Whether scrolling saves like page turns          |
+| `jumps`         | Use the TOC, search, or go back                         | Whether big jumps distort progress               |
+| `highlights`    | Add and delete highlights while reading                 | `annotations_changed` events, no fake page turns |
+| `pdf`           | Read a PDF from the library                             | Whether PDFs save positions the same way         |
+| `sleep`         | Close the laptop lid or lock the screen mid-session     | Wake behaviour and timestamp gaps                |
+
+## Layout
+
+- `logger/watch_viewer.py`: standalone, read-only logger (PEP 723 script, stdlib only)
+- `src/calibre_bookwise/sessions.py`: turns saves into sessions; pure and tested
+- `src/calibre_bookwise/report.py`: `calibre-bookwise-report` CLI
+- `tests/`: `uv run pytest`
+
+Checks: `uv run ruff format . && uv run ruff check . && uv run ty check && uv run pytest`

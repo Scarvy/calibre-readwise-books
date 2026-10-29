@@ -1,0 +1,25 @@
+[project]
+name = "calibre-bookwise"
+version = "0.1.0"
+description = "Record Calibre e-book viewer reading as Readwise Bookwise reading sessions"
+readme = "README.md"
+authors = [
+    { name = "Scott Carvalho", email = "scottcarvalho71@gmail.com" }
+]
+# Calibre 8.x bundles Python 3.11; session code must run inside a Calibre plugin.
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+calibre-bookwise-report = "calibre_bookwise.report:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+    "ty>=0.0.94",
+]

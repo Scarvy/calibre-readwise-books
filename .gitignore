@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# uv / tooling
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Viewer logs: personal reading data with local paths. Test fixtures that
+# need a log are copied into tests/fixtures/.
+logger/logs/
+
+# macOS
+.DS_Store
