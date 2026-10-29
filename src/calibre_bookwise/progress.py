@@ -7,11 +7,18 @@ The remaining steps walk that file from the document: even steps are element
 children (/2 = first element), odd steps are text between elements, and
 ":296" is a character offset. "@x:y" marks an image position and is ignored.
 
-Progress = characters of text before the position / characters in the book,
-which gives per-page precision rather than per-chapter.
+Progress = chapters before, plus the fraction of this chapter's text before
+the position, over the whole book. That gives per-page precision rather than
+per-chapter.
+
+Chapters are weighted by the lengths Calibre's viewer computed when it opened
+the book (its cache), so the result matches the % the viewer shows; Calibre
+counts each image as roughly 1000 characters, which plain text counting misses.
+Without that cache, chapters are weighted by their text length.
 Stdlib only: this has to run inside Calibre's bundled Python 3.11.
 """
 
+import json
 import posixpath
 import re
 import zipfile
@@ -38,6 +45,9 @@ VOID_TAGS = {
     "wbr",
 }
 UNCOUNTED_TAGS = {"head", "script", "style"}
+# The viewer's cache of converted books (macOS location). Inside a Calibre
+# plugin, use calibre.constants.cache_dir() / "ev2" instead.
+VIEWER_CACHE = Path.home() / "Library/Caches/calibre/ev2"
 
 
 @dataclass(frozen=True)
@@ -158,6 +168,7 @@ class Book:
 
     def __init__(self, epub_path: str):
         self.chapters: list[Node] = []
+        self.names: list[str | None] = []  # chapter file paths inside the EPUB
         with zipfile.ZipFile(epub_path) as epub:
             container = ElementTree.fromstring(epub.read("META-INF/container.xml"))
             rootfile_el = container.find(".//{*}rootfile")
@@ -174,20 +185,56 @@ class Book:
                 href = hrefs.get(itemref.get("idref"))
                 if href is None:
                     self.chapters.append(Node("#missing"))
+                    self.names.append(None)
                     continue
                 name = posixpath.normpath(posixpath.join(opf_dir, href))
                 markup = epub.read(name).decode("utf-8", errors="replace")
                 self.chapters.append(parse_document(markup))
+                self.names.append(name)
         self.lengths = [text_length(chapter) for chapter in self.chapters]
-        self.total = sum(self.lengths)
 
-    def progress(self, position: Position) -> float | None:
-        if not 0 <= position.spine_index < len(self.chapters) or not self.total:
+    def progress(
+        self, position: Position, weights: list[int] | None = None
+    ) -> float | None:
+        """weights: per-chapter lengths to use instead of text lengths."""
+        index = position.spine_index
+        weights = weights or self.lengths
+        if not 0 <= index < len(self.chapters) or not sum(weights):
             return None
-        chapter = self.chapters[position.spine_index]
-        within = chars_before(chapter, position.steps, position.offset)
-        before = sum(self.lengths[: position.spine_index])
-        return min((before + within) / self.total, 1.0)
+        within = 0.0
+        if self.lengths[index]:
+            chars = chars_before(self.chapters[index], position.steps, position.offset)
+            within = chars / self.lengths[index]
+        before = sum(weights[:index])
+        return min((before + within * weights[index]) / sum(weights), 1.0)
+
+
+def viewer_lengths(
+    epub_path: str, chapter_names: list[str | None], cache_dir: Path = VIEWER_CACHE
+) -> list[int] | None:
+    """Per-chapter lengths from the viewer's cache, if it has this book.
+
+    Only used when its chapter list matches the EPUB's, so a stale or
+    differently converted cache entry can't skew progress.
+    """
+    try:
+        index = json.loads((cache_dir / "metadata.json").read_text())
+        entries = [
+            entry
+            for versions in index.get("entries", {}).values()
+            for entry in versions
+            if entry.get("book_path") == epub_path and entry.get("status") == "finished"
+        ]
+        if not entries:
+            return None
+        newest = max(entries, key=lambda entry: entry.get("mtime", 0))
+        manifest_path = cache_dir / "f" / newest["path"] / "calibre-book-manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        if manifest["spine"] != chapter_names:
+            return None
+        return [int(manifest["files"][name]["length"]) for name in manifest["spine"]]
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
 
 
 @lru_cache(maxsize=32)
@@ -198,8 +245,10 @@ def _load_book(epub_path: str, mtime: float) -> Book | None:
         return None
 
 
-def book_progress(epub_path: str | None, cfi: str | None) -> float | None:
-    """Fraction of the book's text before the saved position, or None."""
+def book_progress(
+    epub_path: str | None, cfi: str | None, cache_dir: Path = VIEWER_CACHE
+) -> float | None:
+    """Fraction of the book before the saved position, or None."""
     if not epub_path or not cfi or not epub_path.lower().endswith(".epub"):
         return None
     position = parse_cfi(cfi)
@@ -210,4 +259,6 @@ def book_progress(epub_path: str | None, cfi: str | None) -> float | None:
     except OSError:
         return None
     book = _load_book(epub_path, mtime)
-    return book.progress(position) if book else None
+    if book is None:
+        return None
+    return book.progress(position, viewer_lengths(epub_path, book.names, cache_dir))

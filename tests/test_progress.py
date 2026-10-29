@@ -1,3 +1,4 @@
+import json
 import zipfile
 
 import pytest
@@ -107,3 +108,41 @@ def test_saves_from_events_prefers_precise_progress_and_falls_back():
     )
 
     assert [save.progress for save in saves] == [0.24, 0.417]
+
+
+def fake_viewer_cache(tmp_path, epub, spine, lengths):
+    cache = tmp_path / "ev2"
+    (cache / "f" / "c1-test").mkdir(parents=True)
+    entry = {"path": "c1-test", "status": "finished", "mtime": 1, "book_path": epub}
+    (cache / "metadata.json").write_text(json.dumps({"entries": {"x": [entry]}}))
+    manifest = {
+        "spine": spine,
+        "files": {name: {"length": n} for name, n in zip(spine, lengths)},
+    }
+    (cache / "f" / "c1-test" / "calibre-book-manifest.json").write_text(
+        json.dumps(manifest)
+    )
+    return cache
+
+
+SPINE = ["OEBPS/text/ch1.xhtml", "OEBPS/text/ch2.xhtml"]
+
+
+def test_viewer_cache_lengths_weight_chapters(tmp_path, epub):
+    cache = fake_viewer_cache(tmp_path, epub, SPINE, [300, 100])
+
+    # Start of chapter 2: 300 / 400. Halfway through chapter 2: (300 + 50) / 400.
+    assert book_progress(epub, "epubcfi(/4/2/4/2)", cache) == pytest.approx(0.75)
+    assert book_progress(epub, "epubcfi(/4/2/4/2/1:50)", cache) == pytest.approx(0.875)
+
+
+def test_viewer_cache_with_other_chapters_is_ignored(tmp_path, epub):
+    cache = fake_viewer_cache(tmp_path, epub, ["OEBPS/other.xhtml"], [300])
+
+    assert book_progress(epub, "epubcfi(/4/2/4/2)", cache) == pytest.approx(0.5)
+
+
+def test_missing_viewer_cache_falls_back_to_text(tmp_path, epub):
+    assert book_progress(epub, "epubcfi(/4/2/4/2)", tmp_path / "none") == (
+        pytest.approx(0.5)
+    )

@@ -31,6 +31,12 @@ Open issues:
 
 A session is a run of saves for one book, with no gap longer than the idle limit (default 5 minutes). A longer gap still counts as reading (a slow page) if it's within the dwell limit (default 10 minutes) and the viewer kept focus throughout, allowing up to 30s unfocused for blips. Logs without focus data use the idle limit alone. Start and end progress come from the first and last saves that have one. The open questions below decide whether this rule holds up.
 
+## Progress (`src/calibre_bookwise/progress.py`)
+
+The saved position is an EPUB CFI such as `epubcfi(/22/2/4/2[id]/130/2[id]:58)`. The first step is the chapter file; the rest locate the paragraph and character. Progress is the chapters before it, plus the fraction of this chapter's text before the position.
+
+Chapters are weighted by the lengths Calibre's viewer stores in its cache (`~/Library/Caches/calibre/ev2`, found via `metadata.json` by book path), so the % matches what the viewer shows. Calibre counts each image as roughly 1000 characters, so plain text weighting reads low on figure-heavy books. Checked 2026-10-29 on *Design for Developers*: the viewer showed 33%, cache-weighted gave 32.3%, text-only gave 29.0%. Without a matching cache entry, chapters are weighted by text length.
+
 ## Collecting data
 
 ```sh
