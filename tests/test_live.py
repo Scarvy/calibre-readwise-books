@@ -171,3 +171,16 @@ def test_open_and_close_is_recorded_as_skipped(env):
         "skipped",
         "shorter than 0:01:00",
     )
+
+
+def test_record_round_trips_to_session(env):
+    from calibre_bookwise.live import session_from_record
+
+    t = tracker(env)
+    for second in (0, 30, 70):
+        read(env, second)
+        t.poll()
+    [session] = t.open_sessions()
+    [record] = t.end_session()
+
+    assert session_from_record(record) == session

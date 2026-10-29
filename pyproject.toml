@@ -24,3 +24,10 @@ dev = [
     "ruff>=0.17.3",
     "ty>=0.0.94",
 ]
+
+[[tool.ty.overrides]]
+# The plugin imports Calibre and Qt, which only exist in Calibre's own Python.
+include = ["plugin/**"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"

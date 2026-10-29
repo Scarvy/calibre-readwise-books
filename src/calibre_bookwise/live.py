@@ -62,7 +62,7 @@ class Tracker:
         self.data_dir = data_dir
         self.annots_dir = annots_dir
         self.book_lookup = book_lookup
-        self.progress_of = progress_of
+        self.progress_of = _remembered(progress_of) if progress_of else None
         self.focus_probe = focus_probe
         self.clock = clock
         self.idle_limit = idle_limit
@@ -211,6 +211,33 @@ class Tracker:
         temporary = self.state_path.with_suffix(".tmp")
         temporary.write_text(json.dumps({"finished_until": self.finished_until}))
         temporary.replace(self.state_path)
+
+
+def _remembered(progress_of: ProgressOf) -> ProgressOf:
+    """Each position's progress only needs working out once."""
+    known: dict[tuple[str | None, str | None], float | None] = {}
+
+    def progress(path: str | None, cfi: str | None) -> float | None:
+        if (path, cfi) not in known:
+            known[path, cfi] = progress_of(path, cfi)
+        return known[path, cfi]
+
+    return progress
+
+
+def session_from_record(record: dict) -> Session:
+    """Rebuild a Session from a sessions.jsonl record."""
+    return Session(
+        book_key=record["book_key"],
+        book_id=record.get("book_id"),
+        title=record.get("title"),
+        start=datetime.fromisoformat(record["start"]),
+        end=datetime.fromisoformat(record["end"]),
+        start_progress=record.get("start_progress"),
+        end_progress=record.get("end_progress"),
+        saves=record["saves"],
+        longest_gap=timedelta(seconds=record["longest_gap"]),
+    )
 
 
 def _session_record(session: Session, now: datetime) -> dict:
