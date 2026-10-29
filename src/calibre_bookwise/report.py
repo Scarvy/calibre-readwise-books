@@ -10,14 +10,14 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
-from calibre_bookwise.bookwise import (
+from .bookwise import (
     BATCH_SIZE,
     local_timezone,
     session_item,
     skip_reason,
 )
-from calibre_bookwise.progress import book_progress
-from calibre_bookwise.sessions import (
+from .progress import book_progress
+from .sessions import (
     Session,
     build_sessions,
     focus_from_events,

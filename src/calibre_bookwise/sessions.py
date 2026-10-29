@@ -66,8 +66,12 @@ def build_sessions(
     idle_limit: timedelta = DEFAULT_IDLE_LIMIT,
     focus: Sequence[FocusChange] = (),
     dwell_limit: timedelta = DEFAULT_DWELL_LIMIT,
+    ends: Sequence[datetime] = (),
 ) -> list[Session]:
-    """Group saves per book, splitting at gaps over idle_limit unless dwelling."""
+    """Group saves per book, splitting at gaps over idle_limit unless dwelling.
+
+    ends are manual "end session" times: a session never spans one.
+    """
     focus = sorted(focus, key=attrgetter("at"))
     by_book: dict[str, list[Save]] = {}
     for save in saves:
@@ -80,7 +84,8 @@ def build_sessions(
         for previous, save in pairwise(book_saves):
             gap = save.at - previous.at
             dwelling = gap <= dwell_limit and _kept_focus(focus, previous.at, save.at)
-            if gap > idle_limit and not dwelling:
+            ended = any(previous.at <= end < save.at for end in ends)
+            if ended or (gap > idle_limit and not dwelling):
                 sessions.append(_session_from(run))
                 run = []
             run.append(save)

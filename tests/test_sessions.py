@@ -209,3 +209,18 @@ def test_recorded_long_dwell_is_one_session():
 
 def test_recorded_away_and_back_still_splits():
     assert [s.saves for s in sessions_from_log("away-and-back.jsonl")] == [4, 4]
+
+
+def test_manual_end_splits_even_a_steady_session():
+    saves = [save_at(0), save_at(15), save_at(30), save_at(45)]
+
+    first, second = build_sessions(saves, ends=[T0 + timedelta(seconds=20)])
+
+    assert (first.saves, second.saves) == (2, 2)
+    assert second.start == T0 + timedelta(seconds=30)
+
+
+def test_manual_end_after_last_save_changes_nothing():
+    saves = [save_at(0), save_at(15)]
+
+    assert len(build_sessions(saves, ends=[T0 + timedelta(seconds=60)])) == 1

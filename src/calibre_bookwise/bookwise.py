@@ -7,7 +7,7 @@ format "ebook", and start/end positions as fractions of the book (0-1).
 import os
 from datetime import UTC, timedelta
 
-from calibre_bookwise.sessions import Session
+from .sessions import Session
 
 # Opening a book and closing it again isn't a reading session.
 MIN_DURATION = timedelta(minutes=1)
