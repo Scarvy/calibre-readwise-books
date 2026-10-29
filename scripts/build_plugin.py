@@ -9,9 +9,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 IMPORT_NAME = "readwise_books"  # plugins import as calibre_plugins.<this>
-PLUGIN_FILES = ["__init__.py", "ui.py", "images/readwise-books.png"]
+PLUGIN_FILES = ["__init__.py", "ui.py", "metadata_sync.py", "images/readwise-books.png"]
 # Library modules the plugin needs (not the CLI-only report/match_report).
-MODULES = ["bookwise.py", "live.py", "matching.py", "progress.py", "sessions.py"]
+MODULES = [
+    "bookwise.py",
+    "live.py",
+    "matching.py",
+    "metadata.py",
+    "progress.py",
+    "readwise_api.py",
+    "sessions.py",
+]
 
 
 def build(output: Path = ROOT / "dist" / "readwise-books.zip") -> Path:

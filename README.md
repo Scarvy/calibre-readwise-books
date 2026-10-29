@@ -85,9 +85,23 @@ A session finishes once it can't grow any more: its viewer window closed, idle p
 
 Close detection (macOS) tracks viewer **window ids**, not counts: a minimized window or one on another Space is off screen but keeps its id; only closing removes it (checked 2026-10-29). Closing saves the position just before the window goes, so a closed window ends the session of the book with the most recent save, which handles two books open at once. The check takes ~150 ms, so the plugin polls on a background thread.
 
+## Readwise metadata sync (read-only)
+
+**Readwise Books → Sync Readwise metadata** fills 11 custom columns in the Calibre library from your Readwise Books library: Readwise status ("Not in Readwise" when it isn't there), rating, review, started, finished, progress, minutes read, sessions, last read, pages, words. The first run asks before creating the columns; Calibre then needs a restart. Set the token under **Set Readwise token…** (stored in Calibre's `plugins/readwise_books.json`).
+
+`readwise_api.ReadOnlyClient` only has GET methods (`GET /books`, `GET /sessions`), so the sync can't change anything in Readwise. Books are matched as in `matching.py`; ISBN/ASIN matches are remembered in `book_map.json`. Column values come from `metadata.column_updates`.
+
 ## Plugin requirements (not built yet)
 
 - Create a Bookwise book only when it gets its first session, not for the whole library.
+
+## Plan
+
+1. ~~Logger, session rules, precise progress, book matching (dry run)~~
+2. ~~Plugin v0: record sessions in Calibre, end on viewer close, manual end~~
+3. ~~**Readwise metadata sync (read-only)**~~: a GET-only Readwise client fills custom columns in Calibre from your Readwise Books library: status (or "Not in Readwise"), rating, review, started/finished dates, Bookwise progress, total reading time, sessions, last read, pages, words. Nothing is sent to Readwise.
+4. Session upload: send queued sessions with `POST /sessions`, dry run on by default; create books on their first session.
+5. Later, maybe: two-way sync (rating/status edited in Calibre pushed to Readwise).
 
 ## Layout
 

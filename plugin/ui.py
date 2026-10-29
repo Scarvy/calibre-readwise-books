@@ -24,6 +24,7 @@ from calibre_plugins.readwise_books.live import (
     macos_viewer_state,
     session_from_record,
 )
+from calibre_plugins.readwise_books.metadata_sync import MetadataSync
 from calibre_plugins.readwise_books.progress import book_progress
 from qt.core import (
     QAbstractItemView,
@@ -72,6 +73,10 @@ class ReadwiseBooksAction(InterfaceAction):
         menu = QMenu(self.gui)
         menu.addAction("Show sessions", self.show_sessions)
         menu.addAction("End session now", self.end_session)
+        menu.addSeparator()
+        self.metadata_sync = MetadataSync(self.gui, DATA_DIR)
+        menu.addAction("Sync Readwise metadata", self.metadata_sync.sync)
+        menu.addAction("Set Readwise token…", self.metadata_sync.set_token)
         menu.addSeparator()
         menu.addAction("Open data folder", lambda: open_local_file(str(DATA_DIR)))
         self.qaction.setMenu(menu)
