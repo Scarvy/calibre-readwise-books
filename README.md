@@ -2,7 +2,7 @@
 
 Goal: record reading done in Calibre's e-book viewer as Readwise Bookwise reading sessions.
 
-Current stage: session recording and read-only metadata sync are implemented. Optional one-way upload of new highlights and notes is available as an initial v0; reading-session uploads are still planned.
+Current stage: local session recording, optional Readwise Books session upload, read-only metadata sync, and optional one-way upload of new highlights and notes.
 
 ## What we know (Calibre 8.14, macOS)
 
@@ -69,9 +69,9 @@ Open books from the Calibre library so they map to library IDs. Use one label pe
 | `pdf`           | Read a PDF from the library                             | Whether PDFs save positions the same way         |
 | `sleep`         | Close the laptop lid or lock the screen mid-session     | Wake behaviour and timestamp gaps                |
 
-## Calibre plugin v0 (record only)
+## Calibre plugin
 
-The plugin runs the live tracker (`src/calibre_bookwise/live.py`) inside Calibre, polling the viewer's saved positions every 2 seconds. It adds a **Readwise Books** toolbar button (icon: the Bookwise app icon, `plugin/images/readwise-books.png`) with **Show sessions**, **End session now** and **Open data folder**. The sessions window lists in-progress and finished sessions with the Bookwise payload each would send. Reading sessions stay local; highlight uploads are separately opt-in.
+The plugin runs the live tracker (`src/calibre_bookwise/live.py`) inside Calibre, polling the viewer's saved positions every 2 seconds. It adds a **Readwise Books** toolbar button (icon: the Bookwise app icon, `plugin/images/readwise-books.png`). Its menu opens the sync window, ends the current session, controls automatic uploads, syncs library metadata, and holds token and diagnostic settings. The sync window has **Sessions** and **Highlights** tabs with their payloads and send controls.
 
 ```sh
 uv run python scripts/build_plugin.py         # -> dist/readwise-books.zip
@@ -79,27 +79,63 @@ calibre-customize -a dist/readwise-books.zip  # install, then restart Calibre
 calibre-customize -r "Readwise Books"         # uninstall
 ```
 
-Data lives in Calibre's settings folder, not this repo: `~/Library/Preferences/calibre/plugins/readwise_books/` holds `events.jsonl` (saves, focus changes, manual ends), `sessions.jsonl` (finished sessions, the upload queue) and `state.json`.
+Data lives in Calibre's settings folder, not this repo: `~/Library/Preferences/calibre/plugins/readwise_books/` holds `events.jsonl` (saves, focus changes, manual ends), `sessions.jsonl` (finished sessions), `state.json`, and `session_uploads.json` (session mode and delivery state).
 
 A session finishes once it can't grow any more: its viewer window closed, idle past the dwell limit (10 min), a later session of the same book started, or **End session now**. Sessions under a minute are kept but marked `skipped`.
 
 Close detection (macOS) tracks viewer **window ids**, not counts: a minimized window or one on another Space is off screen but keeps its id; only closing removes it (checked 2026-10-29). Closing saves the position just before the window goes, so a closed window ends the session of the book with the most recent save, which handles two books open at once. The check takes ~150 ms, so the plugin polls on a background thread.
 
+### Session mode
+
+**Readwise Books → Automatic uploads → New reading sessions** is off by default. With it
+off, sessions are recorded locally and the **Sessions** tab shows a dry-run payload.
+Turn it on to send **newly finished** sessions to the [Readwise Books API](https://readwise.io/books_api#sessions-create).
+Previously recorded dry-run sessions stay local. Turning the switch off keeps
+sessions that have not yet been sent local as well. The mode survives restarts.
+To upload older local sessions without changing modes, open **Open sync window → Sessions**.
+Select one or more `local` rows (Command-click or Shift-click) and choose
+**Send selected local sessions**, or choose **Send all local sessions** to queue
+every eligible local session in the active Calibre library. Sessions from other
+libraries and sessions that fail the duration or progress rules are excluded.
+
+The plugin matches a book in your Readwise Books library, or creates it when
+its first session is sent. Sessions are sent with `publish_to_feed: false`, so
+they do not appear in the feed; they still count toward Readwise reading time,
+XP, and stats. Sessions shorter than one minute or missing progress stay skipped.
+The **Sessions** tab shows `local`, `pending`, `uploaded`, or `needs review`.
+Readwise does not detect duplicate session requests. If a POST result is
+uncertain, the plugin marks the session `needs review` and stops automatic
+retrying. Check Readwise before using **Retry selected after review** in the
+**Sessions** tab; retrying an existing session creates a duplicate. Keep
+`session_uploads.json` to preserve the delivery history.
+
 ## Readwise metadata sync (read-only)
 
-**Readwise Books → Sync Readwise metadata** fills 11 custom columns in the Calibre library from your Readwise Books library: Readwise status ("Not in Readwise" when it isn't there), rating, review, started, finished, progress, minutes read, sessions, last read, pages, words. The first run asks before creating the columns; Calibre then needs a restart. Set the token under **Set Readwise token…** (stored in Calibre's `plugins/readwise_books.json`).
+**Readwise Books → Sync library metadata from Readwise** fills 11 custom columns in the Calibre library from your Readwise Books library: Readwise status ("Not in Readwise" when it isn't there), rating, review, started, finished, progress, minutes read, sessions, last read, pages, words. The first run asks before creating the columns; Calibre then needs a restart. Set the token under **Settings → Set Readwise token…** (stored in Calibre's `plugins/readwise_books.json`).
 
 `readwise_api.ReadOnlyClient` only has GET methods (`GET /books`, `GET /sessions`), so the sync can't change anything in Readwise. Books are matched as in `matching.py`; ISBN/ASIN matches are remembered in `book_map.json`. Column values come from `metadata.column_updates`.
 
 ## Highlight and note upload v0 (opt-in)
 
-Set your token with **Set Readwise token…**, then check **Upload new highlights and
-notes** in the Readwise Books menu. This writes to Readwise using its [highlights
+Choose **Readwise Books → Open sync window → Highlights** to see saved highlights
+and notes in the active library, newest first. The table refreshes within about
+half a second of a viewer save. Select a row to inspect its exact Readwise
+request body. Viewing the table needs no token and sends nothing.
+
+To import older `local` highlights, Command-click or Shift-click rows and press
+**Send selected local highlights**, or press **Send all local highlights** for
+every eligible saved highlight in the active library. These buttons work even
+when automatic upload is off. They queue one request per poll and keep the
+automatic upload setting unchanged. Highlights without a Calibre annotation ID
+cannot be queued.
+
+Set your token with **Settings → Set Readwise token…**, then check **Automatic uploads → New highlights and notes** in the Readwise Books menu. This writes to Readwise using its [highlights
 API](https://readwise.io/api_deets); the metadata client remains GET-only.
 
 - Enabling takes a baseline of existing viewer annotation IDs: old highlights and
-  edits to those highlights are not imported. New IDs observed after enabling are
-  queued. Imported annotations appearing later also count as new IDs.
+  edits to those highlights are not automatically imported. They can be selected
+  in the table for manual upload. New IDs observed after enabling are queued.
+  Imported annotations appearing later also count as new IDs.
 - A new highlight uploads its text, title, authors, timestamp (when available), and
   attached note after five seconds without changes. Notes added, edited, or cleared
   later on highlights uploaded by this plugin are sent with PATCH. Text edits after
@@ -107,18 +143,22 @@ API](https://readwise.io/api_deets); the metadata client remains GET-only.
 - This is Calibre → Readwise only. Readwise edits are not pulled back; a later
   Calibre note edit replaces the Readwise note. Removing a queued highlight cancels
   its upload; removing an uploaded highlight does not delete it from Readwise.
-- Unchecking pauses uploads. Re-enabling baselines highlights created while disabled;
-  previously queued items resume. The enabled setting and queue survive restarts.
+- Unchecking pauses automatic uploads; explicitly selected highlights still send.
+  Re-enabling baselines highlights created while disabled; previously queued
+  automatic items resume. The enabled setting and queue survive restarts.
 - The active library's books are identified by their viewer annotation path hashes;
   queued books from other libraries wait until that library is selected again.
 
-**Show highlight sync status** displays queue counts and errors. Queue, annotation
+**Settings → Show highlight upload status** displays queue counts and errors. Queue, annotation
 IDs, returned Readwise IDs, and retry deadlines live in `highlights.json` in the
 plugin data folder (including highlight text and notes). Keep this file to preserve
 sync history. Unreadable queue JSON disables highlight sync rather than resetting it.
-Failed uploads retry after 60 seconds; rate limits honor `Retry-After`, without
+Readwise 400/422 validation responses show as `rejected` with the returned error
+in the Highlights tab. They do not retry until you select the row and click
+**Retry rejected**. Other failed uploads retry after 60 seconds; rate limits honor `Retry-After`, without
 sleeping on the GUI thread. Requests use a 30-second timeout and one item per poll.
 Oversize text/notes (over 8,191 characters) are shown as invalid, never truncated.
+Empty notes are omitted from create requests.
 
 The API deduplicates by title/author/text/source URL. This protects ordinary retries,
 but identical passages in the same book can collapse into one highlight. If a retry
@@ -128,7 +168,8 @@ until a remote ID is known. This is not an exactly-once delivery guarantee.
 Book grouping uses title and author with `category: books` and `source_type: calibre`.
 The create endpoint does not accept a Readwise Books/Bookwise ID; association with
 existing Books entries needs live verification. Locations use Readwise's default
-order, not page numbers. No historical import or Readwise deletions are performed.
+order, not page numbers. Historical highlights require explicit selection; no
+Readwise deletions are performed.
 
 Manual validation before release (requires Calibre and a test Readwise account):
 
@@ -139,17 +180,16 @@ Manual validation before release (requires Calibre and a test Readwise account):
 3. Restart Calibre and confirm no duplicate; check the status menu for errors.
 4. Pause uploads and create another highlight; re-enable and confirm it is skipped.
 5. Remove an uploaded highlight in Calibre and confirm Readwise retains it.
-
-## Plugin requirements (not built yet)
-
-- Create a Bookwise book only when it gets its first session, not for the whole library.
+6. With automatic upload off, select one old local highlight in the table and
+   send it; confirm other local highlights remain local. Then send all remaining
+   local highlights and confirm no duplicate requests after restarting Calibre.
 
 ## Plan
 
 1. ~~Logger, session rules, precise progress, book matching (dry run)~~
 2. ~~Plugin v0: record sessions in Calibre, end on viewer close, manual end~~
 3. ~~**Readwise metadata sync (read-only)**~~: a GET-only Readwise client fills custom columns in Calibre from your Readwise Books library: status (or "Not in Readwise"), rating, review, started/finished dates, Bookwise progress, total reading time, sessions, last read, pages, words. Nothing is sent to Readwise.
-4. Session upload: send queued sessions with `POST /sessions`, dry run on by default; create books on their first session.
+4. ~~Session upload: send new finished sessions with `POST /sessions`, dry run on by default; create books on their first session.~~
 5. Later, maybe: two-way sync (rating/status edited in Calibre pushed to Readwise).
 
 ## Layout
