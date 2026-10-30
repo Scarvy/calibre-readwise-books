@@ -77,7 +77,7 @@ class ReadwiseBooksAction(InterfaceAction):
         None,
     )
     action_type = "current"
-    popup_type = 1  # QToolButton.ToolButtonPopupMode.MenuButtonPopup
+    popup_type = 2  # QToolButton.ToolButtonPopupMode.InstantPopup
 
     def genesis(self):
         self.highlights = None
@@ -90,21 +90,19 @@ class ReadwiseBooksAction(InterfaceAction):
         # get_icons is provided by Calibre to plugin code at runtime.
         self.qaction.setIcon(get_icons(ICON, "Readwise Books"))  # noqa: F821
         menu = QMenu(self.gui)
-        open_action = menu.addAction("Open sync window", self.show_sessions)
-        open_action.setIcon(QIcon.ic("sync.png"))
         end_action = menu.addAction("End session now", self.end_session)
         end_action.setIcon(QIcon.ic("window-close.png"))
-        menu.addSeparator()
-        uploads_menu = menu.addMenu("Automatic uploads")
-        uploads_menu.setIcon(QIcon.ic("send.png"))
-        self.session_send_action = uploads_menu.addAction("New reading sessions")
+        sync_menu = menu.addMenu("Sync settings")
+        sync_menu.setIcon(QIcon.ic("sync.png"))
+        self.session_send_action = sync_menu.addAction("Sync reading sessions")
         self.session_send_action.setIcon(QIcon.ic("book.png"))
         self.session_send_action.setCheckable(True)
         self.session_send_action.triggered.connect(self.toggle_session_sending)
-        self.feed_action = uploads_menu.addAction("Post uploaded sessions to feed")
+        self.feed_action = sync_menu.addAction("Post to feed")
+        self.feed_action.setIcon(QIcon.ic("send.png"))
         self.feed_action.setCheckable(True)
         self.feed_action.triggered.connect(self.toggle_feed_posting)
-        self.highlight_action = uploads_menu.addAction("New highlights and notes")
+        self.highlight_action = sync_menu.addAction("Sync highlights and notes")
         self.highlight_action.setIcon(QIcon.ic("highlight.png"))
         self.highlight_action.setCheckable(True)
         self.highlight_action.triggered.connect(self.toggle_highlights)
@@ -125,17 +123,19 @@ class ReadwiseBooksAction(InterfaceAction):
             "Set Readwise token…", self.metadata_sync.set_token
         )
         token_action.setIcon(QIcon.ic("drm-locked.png"))
-        status_action = settings_menu.addAction(
+        developer_menu = settings_menu.addMenu("Developer")
+        developer_menu.setIcon(QIcon.ic("debug.png"))
+        open_action = developer_menu.addAction("Open sync window", self.show_sessions)
+        open_action.setIcon(QIcon.ic("sync.png"))
+        status_action = developer_menu.addAction(
             "Show highlight upload status", self.show_highlight_status
         )
         status_action.setIcon(QIcon.ic("dialog_information.png"))
-        settings_menu.addSeparator()
-        folder_action = settings_menu.addAction(
+        folder_action = developer_menu.addAction(
             "Open data folder", lambda: open_local_file(str(DATA_DIR))
         )
         folder_action.setIcon(QIcon.ic("tb_folder.png"))
         self.qaction.setMenu(menu)
-        self.qaction.triggered.connect(self.show_sessions)
         self.timer = QTimer(self.gui)
         self.timer.timeout.connect(self.poll)
 
@@ -655,9 +655,7 @@ class SessionsPanel(QWidget):
         layout = QVBoxLayout(self)
         self.mode_label = QLabel(self)
         layout.addWidget(self.mode_label)
-        self.feed_checkbox = QCheckBox(
-            "Post uploaded sessions to my Readwise Books feed", self
-        )
+        self.feed_checkbox = QCheckBox("Post to feed", self)
         self.feed_checkbox.toggled.connect(self.action.toggle_feed_posting)
         layout.addWidget(self.feed_checkbox)
         layout.addWidget(self.table)
