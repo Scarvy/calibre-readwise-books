@@ -2,7 +2,13 @@ import json
 
 import pytest
 
-from calibre_bookwise.highlights import HighlightClient, HighlightSync, RateLimited
+from calibre_bookwise.highlights import (
+    HighlightClient,
+    HighlightRejected,
+    HighlightSync,
+    RateLimited,
+    preview_highlights,
+)
 from calibre_bookwise.readwise_api import ReadwiseError
 
 
@@ -153,6 +159,120 @@ def test_http_contract():
     assert requests[0].full_url == "https://readwise.io/api/v2/highlights/"
     assert requests[1].full_url.endswith("/42/")
     assert requests[0].get_header("Authorization") == "Token token"
+    assert json.loads(requests[0].data) == {"highlights": [{"text": "Passage"}]}
+
+
+def test_preview_shows_create_request_without_enabling_or_sending(setup):
+    sync, path, _now, books = setup
+    write(
+        path,
+        highlight(notes="My note", timestamp="2026-10-30T10:00:00Z"),
+        highlight("removed", removed=True),
+    )
+
+    previews, errors = preview_highlights(path.parent, books)
+
+    assert errors == []
+    assert len(previews) == 1
+    assert previews[0]["method"] == "POST"
+    assert previews[0]["url"] == "https://readwise.io/api/v2/highlights/"
+    assert previews[0]["body"] == {
+        "highlights": [
+            {
+                "text": "A passage",
+                "note": "My note",
+                "title": "A book",
+                "author": "An Author",
+                "category": "books",
+                "source_type": "calibre",
+                "location_type": "order",
+                "highlighted_at": "2026-10-30T10:00:00Z",
+            }
+        ]
+    }
+    assert sync.state["enabled"] is False
+    assert not sync.path.exists()
+
+    write(path, highlight(notes="Updated note", timestamp="2026-10-30T10:01:00Z"))
+    updated, errors = preview_highlights(path.parent, books)
+    assert errors == []
+    assert updated[0]["body"]["highlights"][0]["note"] == "Updated note"
+    assert sync.state["items"] == {}
+
+
+@pytest.mark.parametrize("automatic_enabled", [False, True])
+def test_manual_selection_uploads_old_highlight(setup, automatic_enabled):
+    sync, path, _now, books = setup
+    write(path, highlight("old", notes="Old note"), highlight("other"))
+    sync.set_enabled(True)  # baseline both as pre-existing
+    if not automatic_enabled:
+        sync.set_enabled(False)
+    sync.queue_saved(["book:old"], books)
+    client = FakeClient()
+    sync.poll(books, client)
+    assert len(client.calls) == 1
+    assert client.calls[0][0]["note"] == "Old note"
+    assert sync.status("book:old") == "uploaded"
+    assert sync.status("book:other") == "local"
+    assert sync.state["enabled"] is automatic_enabled
+
+
+def test_manual_all_queues_each_old_highlight_without_duplicates(setup):
+    sync, path, _now, books = setup
+    write(path, highlight("one"), highlight("two", notes="Note"))
+    sync.queue_saved(["book:one", "book:two"], books)
+    client = FakeClient()
+    sync.poll(books, client)
+    sync.poll(books, client)
+    sync.poll(books, client)
+    assert len(client.calls) == 2
+    assert {sync.status(key) for key in ("book:one", "book:two")} == {"uploaded"}
+
+
+def test_manual_queue_rejects_missing_key_without_partial_upload(setup):
+    sync, path, _now, books = setup
+    write(path, highlight("one"))
+    with pytest.raises(ValueError):
+        sync.queue_saved(["book:one", "book:missing"], books)
+    assert sync.state["items"] == {}
+
+
+def test_rejected_highlight_stops_retrying_and_shows_reason(setup):
+    sync, path, _now, books = setup
+    write(path, highlight())
+    sync.queue_saved(["book:one"], books)
+
+    class RejectingClient:
+        calls = 0
+
+        def send(self, payload, remote_id=None):
+            self.calls += 1
+            raise HighlightRejected(
+                "Readwise highlight upload failed (HTTP 400): bad note"
+            )
+
+    client = RejectingClient()
+    sync.poll(books, client)
+    sync.poll(books, client)
+    assert client.calls == 1
+    assert sync.status("book:one") == "rejected"
+    assert "bad note" in sync.explanation("book:one", True)
+    write(path, highlight(notes="Corrected"))
+    sync.retry_rejected(["book:one"], books)
+    sync.poll(books, FakeClient())
+    assert sync.status("book:one") == "uploaded"
+
+
+def test_create_omits_empty_note_and_exposes_readwise_400_detail():
+    requests = []
+
+    def fetch(request):
+        requests.append(request)
+        return 400, {}, b'{"detail":"Invalid note"}'
+
+    client = HighlightClient("token", fetch=fetch)
+    with pytest.raises(HighlightRejected, match="Invalid note"):
+        client.send({"text": "Passage", "note": ""})
     assert json.loads(requests[0].data) == {"highlights": [{"text": "Passage"}]}
 
 
