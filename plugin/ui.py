@@ -39,6 +39,7 @@ from calibre_plugins.readwise_books.session_sync import (
 )
 from qt.core import (
     QAbstractItemView,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -100,6 +101,9 @@ class ReadwiseBooksAction(InterfaceAction):
         self.session_send_action.setIcon(QIcon.ic("book.png"))
         self.session_send_action.setCheckable(True)
         self.session_send_action.triggered.connect(self.toggle_session_sending)
+        self.feed_action = uploads_menu.addAction("Post uploaded sessions to feed")
+        self.feed_action.setCheckable(True)
+        self.feed_action.triggered.connect(self.toggle_feed_posting)
         self.highlight_action = uploads_menu.addAction("New highlights and notes")
         self.highlight_action.setIcon(QIcon.ic("highlight.png"))
         self.highlight_action.setCheckable(True)
@@ -163,8 +167,12 @@ class ReadwiseBooksAction(InterfaceAction):
             self.session_send_action.setChecked(
                 self.session_sync.state["mode"] == "send"
             )
+            self.feed_action.setChecked(
+                self.session_sync.state.get("publish_to_feed", False)
+            )
         except (OSError, ValueError):
             self.session_send_action.setEnabled(False)
+            self.feed_action.setEnabled(False)
             error_dialog(
                 self.gui,
                 "Session upload unavailable",
@@ -275,6 +283,25 @@ class ReadwiseBooksAction(InterfaceAction):
                 "Could not save the session mode.",
                 show=True,
             )
+        if self.dialog is not None and self.dialog.isVisible():
+            self.dialog.sessions.refresh()
+
+    def toggle_feed_posting(self, enabled):
+        if self.session_sync is None:
+            self.feed_action.setChecked(False)
+            return
+        try:
+            self.session_sync.set_publish_to_feed(enabled)
+        except (OSError, ValueError):
+            error_dialog(
+                self.gui,
+                "Feed preference unavailable",
+                "Could not save the feed posting preference.",
+                show=True,
+            )
+        self.feed_action.setChecked(
+            self.session_sync.state.get("publish_to_feed", False)
+        )
         if self.dialog is not None and self.dialog.isVisible():
             self.dialog.sessions.refresh()
 
@@ -628,6 +655,11 @@ class SessionsPanel(QWidget):
         layout = QVBoxLayout(self)
         self.mode_label = QLabel(self)
         layout.addWidget(self.mode_label)
+        self.feed_checkbox = QCheckBox(
+            "Post uploaded sessions to my Readwise Books feed", self
+        )
+        self.feed_checkbox.toggled.connect(self.action.toggle_feed_posting)
+        layout.addWidget(self.feed_checkbox)
         layout.addWidget(self.table)
         layout.addWidget(QLabel("Bookwise session payload:", self))
         layout.addWidget(self.payload)
@@ -640,10 +672,16 @@ class SessionsPanel(QWidget):
             return
         sync = self.action.session_sync
         sending = sync is not None and sync.state["mode"] == "send"
+        self.feed_checkbox.blockSignals(True)
+        self.feed_checkbox.setChecked(
+            sync is not None and sync.state.get("publish_to_feed", False)
+        )
+        self.feed_checkbox.setEnabled(sync is not None)
+        self.feed_checkbox.blockSignals(False)
         self.mode_label.setText(
-            "Mode: Send finished sessions to Readwise (feed posts disabled)."
+            "Mode: Send newly finished sessions to Readwise."
             if sending
-            else "Mode: Dry run. Sessions stay local unless sent individually."
+            else "Mode: Dry run. Sessions stay local unless sent manually."
         )
         open_rows = [
             {"session": session, "status": "reading…"}
@@ -757,7 +795,12 @@ class SessionsPanel(QWidget):
         item["book_id"] = (
             bookwise_id or f"<Bookwise id for Calibre book {session.book_id}>"
         )
-        item["publish_to_feed"] = False
+        record = self.rows[row].get("record")
+        item["publish_to_feed"] = (
+            sync.publish_to_feed(record)
+            if sync is not None and record is not None
+            else (sync.state.get("publish_to_feed", False) if sync else False)
+        )
         body = json.dumps({"items": [item]}, indent=2)
         self.payload.setPlainText(f"{error}\n\n{body}" if error else body)
 
@@ -771,7 +814,12 @@ class SessionsPanel(QWidget):
         if not question_dialog(
             self,
             "Send local sessions?",
-            f"Send {len(records)} eligible local session(s) from this Calibre library to Readwise Books? They will stay off your feed.",
+            f"Send {len(records)} eligible local session(s) from this Calibre library to Readwise Books? "
+            + (
+                "They will post to your feed."
+                if self.action.session_sync.state.get("publish_to_feed", False)
+                else "They will stay off your feed."
+            ),
         ):
             return
         self.send_records(records)

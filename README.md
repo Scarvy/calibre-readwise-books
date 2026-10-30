@@ -99,10 +99,17 @@ every eligible local session in the active Calibre library. Sessions from other
 libraries and sessions that fail the duration or progress rules are excluded.
 
 The plugin matches a book in your Readwise Books library, or creates it when
-its first session is sent. Sessions are sent with `publish_to_feed: false`, so
-they do not appear in the feed; they still count toward Readwise reading time,
-XP, and stats. Sessions shorter than one minute or missing progress stay skipped.
+its first session is sent. By default sessions are sent with
+`publish_to_feed: false`, so they do not appear in the feed; they still count
+toward Readwise reading time, XP, and stats. Sessions shorter than one minute
+or missing progress stay skipped.
 The **Sessions** tab shows `local`, `pending`, `uploaded`, or `needs review`.
+**Automatic uploads → Post uploaded sessions to feed** (also in the **Sessions** tab)
+controls whether newly queued session uploads use `publish_to_feed: true`. It is off
+by default and works for automatic uploads and sessions you send manually. Changing
+it does not change sessions already queued or uploaded. Turning it on while dry run
+is active does not send any sessions; it only sets the choice for later uploads.
+
 Readwise does not detect duplicate session requests. If a POST result is
 uncertain, the plugin marks the session `needs review` and stops automatic
 retrying. Check Readwise before using **Retry selected after review** in the

@@ -93,6 +93,39 @@ def test_selected_local_session_sends_while_dry_run_remains_on(tmp_path):
     assert client.sessions[0]["publish_to_feed"] is False
 
 
+def test_feed_toggle_applies_to_future_automatic_and_manual_uploads(tmp_path):
+    local = record()
+    sync = SessionSync(tmp_path, [local])
+    sync.set_publish_to_feed(True)
+    sync.queue_local(local)
+    assert sync.publish_to_feed(local) is True
+    sync.set_mode("send", [local])
+    future = record("2026-10-30T11:00:00+00:00", "2026-10-30T11:05:00+00:00")
+    future["end"] = "2026-10-30T11:04:00+00:00"
+    sync.poll([local, future], BOOKS, None)
+    sync.set_publish_to_feed(False)
+    assert sync.publish_to_feed(local) is True
+    assert sync.publish_to_feed(future) is True
+    assert SessionSync(tmp_path, [local, future]).state["publish_to_feed"] is False
+    client = FakeClient()
+    sync.poll([local, future], BOOKS, client)
+    sync.poll([local, future], BOOKS, client)
+    assert [item["publish_to_feed"] for item in client.sessions] == [True, True]
+
+
+def test_existing_pending_session_stays_off_feed_after_toggle(tmp_path):
+    sync = SessionSync(tmp_path, [])
+    sync.set_mode("send", [])
+    entry = record()
+    sync.poll([entry], BOOKS, None)
+    sync.state["items"][next(iter(sync.state["items"]))].pop("publish_to_feed")
+    sync._save()  # simulate state written by an earlier plugin version
+    sync.set_publish_to_feed(True)
+    client = FakeClient()
+    sync.poll([entry], BOOKS, client)
+    assert client.sessions[0]["publish_to_feed"] is False
+
+
 def test_multiple_selected_local_sessions_queue_without_changing_mode(tmp_path):
     first = record()
     second = record("2026-10-30T11:00:00+00:00", "2026-10-30T11:05:00+00:00")

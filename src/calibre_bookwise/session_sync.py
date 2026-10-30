@@ -90,7 +90,13 @@ class SessionSync:
         if self.path.exists():
             self.state: dict[str, Any] = json.loads(self.path.read_text())
         else:
-            self.state = {"mode": "dry_run", "items": {}, "book_ids": {}, "retry_at": 0}
+            self.state = {
+                "mode": "dry_run",
+                "publish_to_feed": False,
+                "items": {},
+                "book_ids": {},
+                "retry_at": 0,
+            }
             self._register(records)
             self._save()
         if (
@@ -125,8 +131,28 @@ class SessionSync:
                     if record["status"] == "skipped"
                     else ("pending" if self.state["mode"] == "send" else "local"),
                     "error": "",
+                    "publish_to_feed": self.state.get("publish_to_feed", False),
                 }
         return added
+
+    def set_publish_to_feed(self, enabled: bool):
+        """Set the feed preference for sessions queued in the future."""
+        with self.lock:
+            previous = self.state.get("publish_to_feed", False)
+            self.state["publish_to_feed"] = bool(enabled)
+            try:
+                self._save()
+            except OSError:
+                self.state["publish_to_feed"] = previous
+                raise
+
+    def publish_to_feed(self, record: dict) -> bool:
+        """The feed setting a preview or pending upload will use."""
+        with self.lock:
+            item = self.state["items"].get(record_key(record), {})
+            if item.get("status") == "local":
+                return self.state.get("publish_to_feed", False)
+            return item.get("publish_to_feed", False)
 
     def set_mode(self, mode: str, records: list[dict]):
         if mode not in ("dry_run", "send"):
@@ -163,7 +189,12 @@ class SessionSync:
             ):
                 raise ValueError("Select eligible local sessions to send.")
             for item in items:
-                item.update(status="pending", manual=True, error="")
+                item.update(
+                    status="pending",
+                    manual=True,
+                    error="",
+                    publish_to_feed=self.state.get("publish_to_feed", False),
+                )
             self._save()
 
     def _can_send(self, item: dict) -> bool:
@@ -221,7 +252,7 @@ class SessionSync:
                     self._save()
                     break
                 payload = session_item(session, book_id, local_timezone())
-                payload["publish_to_feed"] = False
+                payload["publish_to_feed"] = item.get("publish_to_feed", False)
                 item.update(status="sending", error="")
                 self._save()  # a crash or ambiguous response must not resend
                 self.lock.release()
