@@ -20,6 +20,7 @@ MODULES = [
     "progress.py",
     "readwise_api.py",
     "sessions.py",
+    "session_sync.py",
 ]
 
 
