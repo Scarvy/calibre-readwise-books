@@ -13,7 +13,7 @@ class ReadwiseBooksPlugin(InterfaceActionBase):
     name = "Readwise Books"
     description = (
         "Records reading in Calibre's e-book viewer as reading sessions for "
-        "Readwise Books. v0 records only: nothing is sent anywhere."
+        "Readwise Books, with opt-in upload of new highlights and notes."
     )
     supported_platforms: ClassVar[list[str]] = ["osx", "windows", "linux"]
     author = "Scott Carvalho"

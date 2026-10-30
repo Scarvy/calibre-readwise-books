@@ -13,6 +13,7 @@ PLUGIN_FILES = ["__init__.py", "ui.py", "metadata_sync.py", "images/readwise-boo
 # Library modules the plugin needs (not the CLI-only report/match_report).
 MODULES = [
     "bookwise.py",
+    "highlights.py",
     "live.py",
     "matching.py",
     "metadata.py",

@@ -2,7 +2,7 @@
 
 Polls the e-book viewer's saved positions every few seconds (see live.py)
 and shows recorded sessions with the Bookwise payload each would send.
-Record only: nothing is sent anywhere.
+Reading sessions stay local. Highlight uploads are separately opt-in.
 """
 
 import hashlib
@@ -12,19 +12,20 @@ import traceback
 from pathlib import Path
 
 from calibre.constants import cache_dir, config_dir
-from calibre.gui2 import open_local_file
+from calibre.gui2 import error_dialog, info_dialog, open_local_file
 from calibre.gui2.actions import InterfaceAction
 from calibre_plugins.readwise_books.bookwise import (
     local_timezone,
     session_item,
     skip_reason,
 )
+from calibre_plugins.readwise_books.highlights import HighlightClient, HighlightSync
 from calibre_plugins.readwise_books.live import (
     Tracker,
     macos_viewer_state,
     session_from_record,
 )
-from calibre_plugins.readwise_books.metadata_sync import MetadataSync
+from calibre_plugins.readwise_books.metadata_sync import MetadataSync, prefs
 from calibre_plugins.readwise_books.progress import book_progress
 from qt.core import (
     QAbstractItemView,
@@ -63,6 +64,7 @@ class ReadwiseBooksAction(InterfaceAction):
     popup_type = 1  # QToolButton.ToolButtonPopupMode.MenuButtonPopup
 
     def genesis(self):
+        self.highlights = None
         self.tracker = None
         self.books: dict[str, dict] = {}
         self.dialog = None
@@ -77,6 +79,10 @@ class ReadwiseBooksAction(InterfaceAction):
         self.metadata_sync = MetadataSync(self.gui, DATA_DIR)
         menu.addAction("Sync Readwise metadata", self.metadata_sync.sync)
         menu.addAction("Set Readwise token…", self.metadata_sync.set_token)
+        self.highlight_action = menu.addAction("Upload new highlights and notes")
+        self.highlight_action.setCheckable(True)
+        self.highlight_action.triggered.connect(self.toggle_highlights)
+        menu.addAction("Show highlight sync status", self.show_highlight_status)
         menu.addSeparator()
         menu.addAction("Open data folder", lambda: open_local_file(str(DATA_DIR)))
         self.qaction.setMenu(menu)
@@ -88,6 +94,18 @@ class ReadwiseBooksAction(InterfaceAction):
         if OLD_DATA_DIR.is_dir() and not DATA_DIR.exists():
             OLD_DATA_DIR.rename(DATA_DIR)  # keep sessions recorded before the rename
         self.index_library()
+        try:
+            self.highlights = HighlightSync(DATA_DIR, ANNOTS_DIR)
+            self.highlight_action.setChecked(self.highlights.state["enabled"])
+        except (OSError, ValueError):
+            error_dialog(
+                self.gui,
+                "Highlight sync unavailable",
+                "Could not read highlights.json. Restore the file from backup "
+                "before enabling sync to avoid duplicate uploads.",
+                show=True,
+            )
+            self.highlight_action.setEnabled(False)
         self.tracker = Tracker(
             DATA_DIR,
             ANNOTS_DIR,
@@ -96,6 +114,7 @@ class ReadwiseBooksAction(InterfaceAction):
             viewer_probe=macos_viewer_state,
         )
         self.timer.start(POLL_MS)
+        self.highlight_token = prefs.get("token", "")
 
     def library_changed(self, db):
         self.index_library()
@@ -114,7 +133,12 @@ class ReadwiseBooksAction(InterfaceAction):
                 path = db.format_abspath(book_id, fmt)
                 if path:
                     key = hashlib.sha256(path.encode()).hexdigest()
-                    books[key] = {"book_id": book_id, "title": title, "path": path}
+                    books[key] = {
+                        "book_id": book_id,
+                        "title": title,
+                        "path": path,
+                        "authors": db.field_for("authors", book_id) or (),
+                    }
         self.books = books
 
     def lookup_book(self, key: str) -> dict | None:
@@ -130,6 +154,7 @@ class ReadwiseBooksAction(InterfaceAction):
         """
         if self.tracker is None:
             return
+        self.highlight_token = prefs.get("token", "")
         if not self.polling:
             self.polling = True
             threading.Thread(target=self._poll_in_background, daemon=True).start()
@@ -139,6 +164,13 @@ class ReadwiseBooksAction(InterfaceAction):
     def _poll_in_background(self):
         try:
             self.tracker.poll()
+            if self.highlights is not None:
+                client = (
+                    HighlightClient(self.highlight_token)
+                    if self.highlight_token
+                    else None
+                )
+                self.highlights.poll(self.books.copy(), client)
             self.poll_failed = False
         # A tracker bug must never break the plugin: log it once and keep going.
         except Exception:  # noqa: BLE001
@@ -147,6 +179,42 @@ class ReadwiseBooksAction(InterfaceAction):
             self.poll_failed = True
         finally:
             self.polling = False
+
+    def toggle_highlights(self, enabled):
+        if self.highlights is None:
+            self.highlight_action.setChecked(False)
+            return
+        if enabled and not prefs.get("token") and not self.metadata_sync.set_token():
+            self.highlight_action.setChecked(False)
+            return
+        try:
+            self.highlights.set_enabled(enabled)
+        except (OSError, ValueError):
+            self.highlight_action.setChecked(self.highlights.state["enabled"])
+            error_dialog(
+                self.gui,
+                "Highlight sync unavailable",
+                "Could not save or baseline annotations. Try again after the viewer "
+                "has finished saving.",
+                show=True,
+            )
+
+    def show_highlight_status(self):
+        if self.highlights is None:
+            return
+        with self.highlights.lock:
+            items = list(self.highlights.state["items"].values())
+            counts = {}
+            for item in items:
+                counts[item["status"]] = counts.get(item["status"], 0) + 1
+            errors = sorted({item["error"] for item in items if item.get("error")})
+        message = "\n".join(f"{status}: {count}" for status, count in counts.items())
+        message = message or "No new highlights recorded."
+        if not prefs.get("token"):
+            message += "\nSet a Readwise token to upload queued highlights."
+        if errors:
+            message += "\n\n" + "\n".join(errors)
+        info_dialog(self.gui, "Highlight sync status", message, show=True)
 
     def end_session(self):
         if self.tracker is not None:
@@ -205,7 +273,7 @@ class SessionsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(
             QLabel(
-                "Recorded from the e-book viewer. Nothing is sent to Readwise yet: "
+                "Recorded from the e-book viewer. Reading sessions stay local: "
                 "the payload below is what each session would send.",
                 self,
             )
