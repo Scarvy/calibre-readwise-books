@@ -13,8 +13,8 @@ This repository builds a Calibre GUI plugin that records viewer sessions and opt
 - `src/calibre_bookwise/session_sync.py`: session upload state and Readwise Books POSTs.
 - `src/calibre_bookwise/highlights.py`: highlight upload state and Readwise API calls.
 - `src/calibre_bookwise/metadata.py`: custom column values.
-- `scripts/build_plugin.py`: packages `plugin/` and its listed shared modules into `dist/readwise-books.zip`.
-- `logger/`, `src/calibre_bookwise/report.py`, `src/calibre_bookwise/match_report.py`, and `scripts/sync_dry_run.py`: diagnostics, outside the installed plugin.
+- `scripts/build_plugin.py`: packages `plugin/` and all shared runtime modules from `src/calibre_bookwise/` into `dist/readwise-books.zip`. Keep diagnostic CLIs in `scripts/` so they are not installed with the plugin.
+- `logger/` and `scripts/report.py`, `scripts/match_report.py`, and `scripts/sync_dry_run.py`: standalone diagnostics, outside the installed plugin. Run them with `uv run python scripts/<name>.py`.
 
 ## Behavior to preserve
 

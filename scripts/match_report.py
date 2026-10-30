@@ -3,7 +3,7 @@
 Nothing is sent. The Bookwise side comes from a snapshot of books_list_books
 results saved as JSON (a list of books).
 
-Usage:  uv run calibre-bookwise-match --snapshot snapshots/bookwise-library.json
+Usage:  uv run python scripts/match_report.py --snapshot snapshots/bookwise-library.json
             [--library ~/Calibre\\ Library] [CALIBRE_ID ...]
 """
 
@@ -11,7 +11,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .matching import create_requests, plan_matches, read_calibre_books
+from calibre_bookwise.matching import create_requests, plan_matches, read_calibre_books
 
 DEFAULT_LIBRARY = Path.home() / "Calibre Library"
 
@@ -51,3 +51,7 @@ def main(argv: list[str] | None = None):
         print("\nWould send to books_create_books (dry run, not sent):")
         for body in requests:
             print(json.dumps(body, indent=2))
+
+
+if __name__ == "__main__":
+    main()

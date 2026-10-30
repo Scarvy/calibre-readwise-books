@@ -1,6 +1,6 @@
 """Print the reading sessions found in viewer logs.
 
-Usage:  uv run calibre-bookwise-report logger/logs/*.jsonl
+Usage:  uv run python scripts/report.py logger/logs/*.jsonl
             [--idle-minutes 5] [--dwell-minutes 10]
 """
 
@@ -10,14 +10,14 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
-from .bookwise import (
+from calibre_bookwise.bookwise import (
     BATCH_SIZE,
     local_timezone,
     session_item,
     skip_reason,
 )
-from .progress import book_progress
-from .sessions import (
+from calibre_bookwise.progress import book_progress
+from calibre_bookwise.sessions import (
     Session,
     build_sessions,
     focus_from_events,
@@ -151,3 +151,7 @@ def main(argv: list[str] | None = None):
             timedelta(minutes=args.idle_minutes),
             timedelta(minutes=args.dwell_minutes),
         )
+
+
+if __name__ == "__main__":
+    main()

@@ -188,7 +188,7 @@ def summarize(events: list[dict]):
     for title, times in by_book.items():
         gaps = [round((b - a).total_seconds()) for a, b in itertools.pairwise(times)]
         print(f"  {title}: {len(times)} saves, gaps (s): {gaps or '-'}")
-    print("\nSessions: uv run calibre-bookwise-report logger/logs/*.jsonl")
+    print("\nSessions: uv run python scripts/report.py logger/logs/*.jsonl")
 
 
 def stop_on_signal(signum, frame):

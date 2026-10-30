@@ -36,3 +36,12 @@ uv run ruff check .
 uv run ruff format --check .
 uv run ty check .
 ```
+
+For local diagnostics, use the scripts directly:
+
+```sh
+uv run python scripts/report.py logger/logs/*.jsonl
+uv run python scripts/match_report.py --snapshot snapshots/bookwise-library.json
+```
+
+The match report requires a local JSON snapshot of your Readwise Books library; neither command uploads data.
