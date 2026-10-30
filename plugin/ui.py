@@ -20,6 +20,7 @@ from calibre_plugins.readwise_books.bookwise import (
     session_item,
     skip_reason,
 )
+from calibre_plugins.readwise_books.build_info import BUILD_CHANNEL
 from calibre_plugins.readwise_books.highlights import (
     HighlightClient,
     HighlightSync,
@@ -71,9 +72,11 @@ VIEWER_CACHE = Path(cache_dir()) / "ev2"
 class ReadwiseBooksAction(InterfaceAction):
     name = "Readwise Books"
     action_spec = (
-        "Readwise Books",
+        "Readwise Books [DEV]" if BUILD_CHANNEL == "development" else "Readwise Books",
         None,  # icon set in genesis from the plugin's own images/
-        "Reading sessions for Readwise Books",
+        "Development build of Readwise Books"
+        if BUILD_CHANNEL == "development"
+        else "Reading sessions for Readwise Books",
         None,
     )
     action_type = "current"
@@ -90,6 +93,11 @@ class ReadwiseBooksAction(InterfaceAction):
         # get_icons is provided by Calibre to plugin code at runtime.
         self.qaction.setIcon(get_icons(ICON, "Readwise Books"))  # noqa: F821
         menu = QMenu(self.gui)
+        if BUILD_CHANNEL == "development":
+            build_action = menu.addAction("DEV BUILD · installed from a local build")
+            build_action.setIcon(QIcon.ic("debug.png"))
+            build_action.setEnabled(False)
+            menu.addSeparator()
         end_action = menu.addAction("End session now", self.end_session)
         end_action.setIcon(QIcon.ic("window-close.png"))
         sync_menu = menu.addMenu("Sync settings")
@@ -125,6 +133,11 @@ class ReadwiseBooksAction(InterfaceAction):
         token_action.setIcon(QIcon.ic("drm-locked.png"))
         developer_menu = settings_menu.addMenu("Developer")
         developer_menu.setIcon(QIcon.ic("debug.png"))
+        channel_action = developer_menu.addAction(
+            "Build: Development" if BUILD_CHANNEL == "development" else "Build: Release"
+        )
+        channel_action.setEnabled(False)
+        developer_menu.addSeparator()
         open_action = developer_menu.addAction("Open sync window", self.show_sessions)
         open_action.setIcon(QIcon.ic("sync.png"))
         status_action = developer_menu.addAction(

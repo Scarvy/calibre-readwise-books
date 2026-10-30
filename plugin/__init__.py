@@ -7,6 +7,7 @@ Calibre loads this file first and imports actual_plugin only in the GUI.
 from typing import ClassVar
 
 from calibre.customize import InterfaceActionBase
+from calibre_plugins.readwise_books.build_info import BUILD_CHANNEL
 
 
 class ReadwiseBooksPlugin(InterfaceActionBase):
@@ -14,6 +15,11 @@ class ReadwiseBooksPlugin(InterfaceActionBase):
     description = (
         "Records reading in Calibre's e-book viewer as reading sessions for "
         "Readwise Books, with opt-in session and highlight uploads."
+        + (
+            " Development build."
+            if BUILD_CHANNEL == "development"
+            else " Release build."
+        )
     )
     supported_platforms: ClassVar[list[str]] = ["osx", "windows", "linux"]
     author = "Scott Carvalho"
