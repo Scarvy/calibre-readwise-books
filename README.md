@@ -5,7 +5,7 @@
 > 
 > If more people use it I'll consider giving it more love and care (e.g. fix bugs, upstream features etc.).
 >
-> If you try it, let me know how it goes—bug reports and feature ideas are welcome in Issues.
+> If you try it, let me know how it goes. Bug reports and feature ideas are welcome in the Issues tracker.
 
 A Calibre plugin that records reading sessions in the e-book viewer and syncs sessions, highlights, and notes to Readwise Books. It can also pull Readwise Books metadata into Calibre and offer to open an EPUB near your Readwise reading progress. Uploads are optional and off by default.
 
