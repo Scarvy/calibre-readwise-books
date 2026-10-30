@@ -113,6 +113,8 @@ retrying. Check Readwise before using **Retry selected after review** in the
 
 **Readwise Books → Sync library metadata from Readwise** fills 11 custom columns in the Calibre library from your Readwise Books library: Readwise status ("Not in Readwise" when it isn't there), rating, review, started, finished, progress, minutes read, sessions, last read, pages, words. The first run asks before creating the columns; Calibre then needs a restart. Set the token under **Settings → Set Readwise token…** (stored in Calibre's `plugins/readwise_books.json`).
 
+If the selected book's Readwise progress changes during a metadata sync, the plugin offers to open its EPUB near that percentage. You can decline and keep your current place. **Readwise Books → Open selected book at Readwise progress…** offers the same choice later. This requires an EPUB copy; the location is approximate because Readwise supplies a percentage, not an EPUB position.
+
 `readwise_api.ReadOnlyClient` only has GET methods (`GET /books`, `GET /sessions`), so the sync can't change anything in Readwise. Books are matched as in `matching.py`; ISBN/ASIN matches are remembered in `book_map.json`. Column values come from `metadata.column_updates`.
 
 ## Highlight and note upload v0 (opt-in)

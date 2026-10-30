@@ -3,7 +3,12 @@ import zipfile
 
 import pytest
 
-from calibre_bookwise.progress import Position, book_progress, parse_cfi
+from calibre_bookwise.progress import (
+    Position,
+    book_progress,
+    parse_cfi,
+    viewer_position_at_progress,
+)
 from calibre_bookwise.sessions import saves_from_events
 
 CONTAINER = """<?xml version="1.0"?>
@@ -46,6 +51,13 @@ def test_parse_calibre_cfi_with_ids_and_offset():
     assert parse_cfi(
         "epubcfi(/22/2/4/2[sbo-rt-content]/10/2[pgfId-998551]:296)"
     ) == Position(spine_index=10, steps=(2, 4, 2, 10, 2), offset=296)
+
+
+def test_viewer_position_at_progress_uses_epub_length(epub, tmp_path):
+    # Two chapters, 100 counted characters each. Calibre locations use 1/1000 units.
+    assert viewer_position_at_progress(epub, 8, tmp_path / "no-cache") == "0.016"
+    assert viewer_position_at_progress(epub, 100, tmp_path / "no-cache") == "0.2"
+    assert viewer_position_at_progress(epub, 101, tmp_path / "no-cache") is None
 
 
 def test_parse_cfi_ignores_image_position():

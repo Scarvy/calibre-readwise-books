@@ -262,3 +262,29 @@ def book_progress(
     if book is None:
         return None
     return book.progress(position, viewer_lengths(epub_path, book.names, cache_dir))
+
+
+def viewer_position_at_progress(
+    epub_path: str | None, progress: float, cache_dir: Path = VIEWER_CACHE
+) -> str | None:
+    """Calibre --open-at position for a 0-100 progress value in an EPUB.
+
+    The viewer measures positions in thousands of characters. Its cached
+    chapter lengths give the closest match to its own percentage display.
+    """
+    if (
+        not epub_path
+        or not epub_path.lower().endswith(".epub")
+        or not 0 <= progress <= 100
+    ):
+        return None
+    try:
+        mtime = Path(epub_path).stat().st_mtime
+    except OSError:
+        return None
+    book = _load_book(epub_path, mtime)
+    if book is None:
+        return None
+    lengths = viewer_lengths(epub_path, book.names, cache_dir) or book.lengths
+    total = sum(lengths)
+    return str(round(progress * total / 100_000, 3)) if total else None

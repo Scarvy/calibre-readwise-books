@@ -109,6 +109,11 @@ class ReadwiseBooksAction(InterfaceAction):
             "Sync library metadata from Readwise", self.metadata_sync.sync
         )
         metadata_action.setIcon(QIcon.ic("download-metadata.png"))
+        position_action = menu.addAction(
+            "Open selected book at Readwise progress…",
+            self.metadata_sync.open_selected_at_readwise_progress,
+        )
+        position_action.setIcon(QIcon.ic("view.png"))
         menu.addSeparator()
         settings_menu = menu.addMenu("Settings")
         settings_menu.setIcon(QIcon.ic("gear.png"))
