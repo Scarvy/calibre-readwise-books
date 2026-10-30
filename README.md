@@ -17,14 +17,20 @@ Add **Readwise Books** to a Calibre toolbar if it is not visible. To sync with R
 
 ## Use
 
-Open a book from your Calibre library in the e-book viewer. The plugin records finished reading sessions locally. Choose **Readwise Books → Settings → Developer → Open sync window** to review sessions and highlights in separate tabs, inspect their request payloads, and send selected or all eligible local items.
+Open a book from your Calibre library in the e-book viewer. The plugin records finished reading sessions locally.
 
-- **Sync settings → Sync reading sessions** sends newly finished sessions. Earlier local sessions stay local until you send them from the Sessions tab.
-- **Sync settings → Post to feed** controls whether newly queued session uploads appear in your Readwise Books feed. It is off by default and also available in the Sessions tab. Turning it on does not send anything by itself.
-- **Sync settings → Sync highlights and notes** sends new highlights. Earlier highlights can be sent from the Highlights tab. Notes on highlights uploaded by this plugin update when edited in Calibre.
-- **Sync library metadata from Readwise** fills Calibre custom columns. On the first run, Calibre must restart after creating them. If the selected book's Readwise progress changed, you can choose to open its EPUB near that percentage.
+- **Sync settings → Sync reading sessions** sends newly finished sessions to Readwise Books, where they appear in the book's timeline. Earlier local sessions can be sent from the Sessions tab.
+- **Sync settings → Post to feed** adds newly uploaded sessions to your Readwise Books feed. It is off by default and does not send sessions by itself.
+- **Sync settings → Sync highlights and notes** uploads new highlights from the e-book viewer. Earlier highlights can be sent from the Highlights tab. Notes on highlights uploaded by this plugin update when edited in Calibre.
+- **Sync library metadata from Readwise** fills Calibre custom columns. On the first run, Calibre must restart after creating them. If the selected book's Readwise progress changed, you can choose to open its EPUB near that percentage. The position is approximate.
 
-Sync is one way for highlights and notes; deleting a highlight in Calibre does not delete its Readwise copy. If a session shows **needs review**, check Readwise before retrying to avoid a duplicate.
+Sync is one way for highlights and notes; deleting a highlight in Calibre does not delete its Readwise copy. TODO: see if it can be a two-way sync.
+
+## Debugging
+
+Curious how sync works, or investigating an issue? Choose **Readwise Books → Settings → Developer → Open sync window** to review sessions and highlights in separate tabs, inspect the payload each upload would send, and send selected or all eligible local items. The Developer menu also has highlight upload status and the plugin data folder.
+
+If a session shows **needs review**, check Readwise before retrying to avoid a duplicate.
 
 ## Contribute
 
