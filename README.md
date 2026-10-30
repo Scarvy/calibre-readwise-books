@@ -1,4 +1,9 @@
-# Readwise Books for Calibre
+# Readwise Books for Calibre - Track reading sessions with Readwise Books
+
+> [!NOTE]
+> A very vibe-coded piece of software... but it works! In that case, use at your own risk and be aware it may have bugs. 
+> 
+> If more people use it I'll consider giving it more love and care (e.g. fix bugs, upstream features etc.).
 
 A Calibre plugin that records reading sessions in the e-book viewer and syncs sessions, highlights, and notes to Readwise Books. It can also pull Readwise Books metadata into Calibre and offer to open an EPUB near your Readwise reading progress. Uploads are optional and off by default.
 
