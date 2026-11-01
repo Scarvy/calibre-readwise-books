@@ -164,7 +164,7 @@ class ReadwiseBooksAction(InterfaceAction):
         self.index_library()
         try:
             self.highlights = HighlightSync(DATA_DIR, ANNOTS_DIR)
-            self.highlight_action.setChecked(self.highlights.state["enabled"])
+            self.highlight_action.setChecked(self.highlights.enabled)
         except (OSError, ValueError):
             error_dialog(
                 self.gui,
@@ -183,12 +183,8 @@ class ReadwiseBooksAction(InterfaceAction):
         )
         try:
             self.session_sync = SessionSync(DATA_DIR, self.tracker.finished_sessions())
-            self.session_send_action.setChecked(
-                self.session_sync.state["mode"] == SessionMode.SEND
-            )
-            self.feed_action.setChecked(
-                self.session_sync.state.get("publish_to_feed", False)
-            )
+            self.session_send_action.setChecked(self.session_sync.sending)
+            self.feed_action.setChecked(self.session_sync.feed_default)
         except (OSError, ValueError):
             self.session_send_action.setEnabled(False)
             self.feed_action.setEnabled(False)
@@ -277,7 +273,7 @@ class ReadwiseBooksAction(InterfaceAction):
                 SessionMode.SEND if enabled else SessionMode.DRY_RUN,
                 tracker.finished_sessions(),
             ),
-            saved=lambda: sync.state["mode"] == SessionMode.SEND,
+            saved=lambda: sync.sending,
             failure_title="Session mode unavailable",
             failure_message="Could not save the session mode.",
         )
@@ -289,7 +285,7 @@ class ReadwiseBooksAction(InterfaceAction):
             available=sync is not None,
             needs_token=False,
             apply=lambda: sync.set_publish_to_feed(enabled),
-            saved=lambda: sync.state.get("publish_to_feed", False),
+            saved=lambda: sync.feed_default,
             failure_title="Feed preference unavailable",
             failure_message="Could not save the feed posting preference.",
         )
@@ -301,7 +297,7 @@ class ReadwiseBooksAction(InterfaceAction):
             available=highlights is not None,
             needs_token=enabled,
             apply=lambda: highlights.set_enabled(enabled),
-            saved=lambda: highlights.state["enabled"],
+            saved=lambda: highlights.enabled,
             failure_title="Highlight sync unavailable",
             failure_message="Could not save or baseline annotations. Try again "
             "after the viewer has finished saving.",
@@ -338,12 +334,7 @@ class ReadwiseBooksAction(InterfaceAction):
     def show_highlight_status(self):
         if self.highlights is None:
             return
-        with self.highlights.lock:
-            items = list(self.highlights.state["items"].values())
-            counts = {}
-            for item in items:
-                counts[item["status"]] = counts.get(item["status"], 0) + 1
-            errors = sorted({item["error"] for item in items if item.get("error")})
+        counts, errors = self.highlights.summary()
         message = "\n".join(f"{status}: {count}" for status, count in counts.items())
         message = message or "No new highlights recorded."
         if not prefs.get("token"):
@@ -583,7 +574,7 @@ class HighlightsPanel(SyncPanel):
         ]
         self.mode_label.setText(
             "Automatic upload: on. Older local highlights can be sent below."
-            if sync is not None and sync.state["enabled"]
+            if sync is not None and sync.enabled
             else "Automatic upload: off. Selected highlights can still be sent."
         )
         self.errors_label.setText("; ".join(errors[:3]))
@@ -714,11 +705,9 @@ class SessionsPanel(SyncPanel):
         if tracker is None:
             return
         sync = self.action.session_sync
-        sending = sync is not None and sync.state["mode"] == SessionMode.SEND
+        sending = sync is not None and sync.sending
         self.feed_checkbox.blockSignals(True)
-        self.feed_checkbox.setChecked(
-            sync is not None and sync.state.get("publish_to_feed", False)
-        )
+        self.feed_checkbox.setChecked(sync is not None and sync.feed_default)
         self.feed_checkbox.setEnabled(sync is not None)
         self.feed_checkbox.blockSignals(False)
         self.mode_label.setText(
@@ -787,7 +776,7 @@ class SessionsPanel(SyncPanel):
             return
         # A local session has no resolved Readwise book id yet.
         item = session_item(session, 0, local_timezone())
-        bookwise_id = sync.state["book_ids"].get(session.book_key) if sync else None
+        bookwise_id = sync.book_id_for(session.book_key) if sync else None
         item["book_id"] = (
             bookwise_id or f"<Bookwise id for Calibre book {session.book_id}>"
         )
@@ -795,7 +784,7 @@ class SessionsPanel(SyncPanel):
         item["publish_to_feed"] = (
             sync.publish_to_feed(record)
             if sync is not None and record is not None
-            else (sync.state.get("publish_to_feed", False) if sync else False)
+            else (sync.feed_default if sync else False)
         )
         body = json.dumps({"items": [item]}, indent=2)
         self.payload.setPlainText(f"{error}\n\n{body}" if error else body)
@@ -813,7 +802,7 @@ class SessionsPanel(SyncPanel):
             f"Send {len(records)} eligible local session(s) from this Calibre library to Readwise Books? "
             + (
                 "They will post to your feed."
-                if self.action.session_sync.state.get("publish_to_feed", False)
+                if self.action.session_sync.feed_default
                 else "They will stay off your feed."
             ),
         ):

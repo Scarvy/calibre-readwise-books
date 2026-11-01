@@ -315,3 +315,17 @@ def test_explanation_says_why_a_pending_highlight_waits(setup):
         "Couldn't reach Readwise",
         Waiting.RETRY,
     )
+
+
+def test_summary_counts_statuses_and_lists_distinct_errors(setup):
+    sync, path, _now, books = setup
+    write(path, highlight("one"), highlight("two"), highlight("three"))
+    sync.queue_saved(["book:one", "book:two"], books)
+
+    class Offline:
+        def send(self, payload, remote_id=None):
+            raise ReadwiseError("Couldn't reach Readwise")
+
+    sync.poll(books, Offline())
+    assert sync.enabled is False
+    assert sync.summary() == ({"pending": 2}, ["Couldn't reach Readwise"])

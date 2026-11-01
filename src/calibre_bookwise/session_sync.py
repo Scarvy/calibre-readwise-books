@@ -128,6 +128,23 @@ class SessionSync:
                 }
         return added
 
+    @property
+    def sending(self) -> bool:
+        """Whether newly finished sessions are sent automatically."""
+        with self.lock:
+            return self.state["mode"] == SessionMode.SEND
+
+    @property
+    def feed_default(self) -> bool:
+        """Whether sessions queued from now on post to the Readwise feed."""
+        with self.lock:
+            return self.state.get("publish_to_feed", False)
+
+    def book_id_for(self, book_key: str) -> int | None:
+        """The Readwise book id this book file's sessions go to, once known."""
+        with self.lock:
+            return self.state["book_ids"].get(book_key)
+
     def set_publish_to_feed(self, enabled: bool):
         """Set the feed preference for sessions queued in the future."""
         with self.lock:

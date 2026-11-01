@@ -240,3 +240,20 @@ def test_books_client_posts_off_feed_session_and_checks_result():
     assert json.loads(requests[0].data) == {
         "items": [{"book_id": 42, "publish_to_feed": False}]
     }
+
+
+def test_settings_and_book_ids_are_readable_without_touching_state(tmp_path):
+    sync = SessionSync(tmp_path, [])
+    assert (sync.sending, sync.feed_default, sync.book_id_for("book")) == (
+        False,
+        False,
+        None,
+    )
+    sync.set_mode("send", [])
+    sync.set_publish_to_feed(True)
+    sync.poll([record()], BOOKS, FakeClient())
+    assert (sync.sending, sync.feed_default, sync.book_id_for("book")) == (
+        True,
+        True,
+        42,
+    )

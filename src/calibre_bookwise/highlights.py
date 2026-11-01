@@ -211,6 +211,21 @@ class HighlightSync:
     def _save(self):
         atomic_write_json(self.path, self.state, indent=2)
 
+    @property
+    def enabled(self) -> bool:
+        """Whether new highlights are uploaded automatically."""
+        with self.lock:
+            return self.state["enabled"]
+
+    def summary(self) -> tuple[dict[str, int], list[str]]:
+        """How many highlights are in each status, and the distinct errors."""
+        with self.lock:
+            items = list(self.state["items"].values())
+        counts: dict[str, int] = {}
+        for item in items:
+            counts[item["status"]] = counts.get(item["status"], 0) + 1
+        return counts, sorted({item["error"] for item in items if item.get("error")})
+
     def set_enabled(self, enabled: bool):
         with self.lock:
             if enabled:
