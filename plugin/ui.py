@@ -338,11 +338,7 @@ class ReadwiseBooksAction(InterfaceAction):
         if not available:
             menu_action.setChecked(False)
             return
-        if (
-            needs_token
-            and not prefs.get("token")
-            and not self.metadata_sync.set_token()
-        ):
+        if needs_token and not self.have_token():
             menu_action.setChecked(False)
             return
         try:
@@ -351,6 +347,10 @@ class ReadwiseBooksAction(InterfaceAction):
             error_dialog(self.gui, failure_title, failure_message, show=True)
         menu_action.setChecked(saved())
         self.refresh_sessions_window()
+
+    def have_token(self) -> bool:
+        """Whether a Readwise token is set, asking for one if not."""
+        return bool(prefs.get("token")) or self.metadata_sync.set_token()
 
     def show_highlight_status(self):
         if self.highlights is None:
@@ -670,7 +670,7 @@ class HighlightsPanel(SyncPanel):
         sync = self.action.highlights
         if sync is None or not keys:
             return
-        if not prefs.get("token") and not self.action.metadata_sync.set_token():
+        if not self.action.have_token():
             return
         try:
             if retry:
@@ -837,7 +837,7 @@ class SessionsPanel(SyncPanel):
         sync = self.action.session_sync
         if sync is None or not records:
             return
-        if not prefs.get("token") and not self.action.metadata_sync.set_token():
+        if not self.action.have_token():
             return
         try:
             sync.queue_locals(records)
