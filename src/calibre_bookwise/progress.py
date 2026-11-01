@@ -245,21 +245,24 @@ def _load_book(epub_path: str, mtime: float) -> Book | None:
         return None
 
 
-def book_progress(
-    epub_path: str | None, cfi: str | None, cache_dir: Path = VIEWER_CACHE
-) -> float | None:
-    """Fraction of the book before the saved position, or None."""
-    if not epub_path or not cfi or not epub_path.lower().endswith(".epub"):
-        return None
-    position = parse_cfi(cfi)
-    if position is None:
+def _epub(epub_path: str | None) -> Book | None:
+    """The parsed EPUB at this path, reloaded only when the file changes."""
+    if not epub_path or not epub_path.lower().endswith(".epub"):
         return None
     try:
         mtime = Path(epub_path).stat().st_mtime
     except OSError:
         return None
-    book = _load_book(epub_path, mtime)
-    if book is None:
+    return _load_book(epub_path, mtime)
+
+
+def book_progress(
+    epub_path: str | None, cfi: str | None, cache_dir: Path = VIEWER_CACHE
+) -> float | None:
+    """Fraction of the book before the saved position, or None."""
+    position = parse_cfi(cfi) if cfi else None
+    book = _epub(epub_path) if position else None
+    if book is None or position is None or epub_path is None:
         return None
     return book.progress(position, viewer_lengths(epub_path, book.names, cache_dir))
 
@@ -272,18 +275,8 @@ def viewer_position_at_progress(
     The viewer measures positions in thousands of characters. Its cached
     chapter lengths give the closest match to its own percentage display.
     """
-    if (
-        not epub_path
-        or not epub_path.lower().endswith(".epub")
-        or not 0 <= progress <= 100
-    ):
-        return None
-    try:
-        mtime = Path(epub_path).stat().st_mtime
-    except OSError:
-        return None
-    book = _load_book(epub_path, mtime)
-    if book is None:
+    book = _epub(epub_path) if 0 <= progress <= 100 else None
+    if book is None or epub_path is None:
         return None
     lengths = viewer_lengths(epub_path, book.names, cache_dir) or book.lengths
     total = sum(lengths)
