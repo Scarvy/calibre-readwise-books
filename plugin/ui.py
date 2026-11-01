@@ -567,15 +567,14 @@ class HighlightsPanel(SyncPanel):
     def refresh(self):
         sync = self.action.highlights
         previews, errors = self.previews.get(self.action.books)
+        token = bool(prefs.get("token"))
         for preview in previews:
-            preview["status"] = (
-                sync.status(preview["key"]) if sync else HighlightStatus.UNAVAILABLE
-            )
-            explanation = (
-                sync.explanation(preview["key"], bool(prefs.get("token")))
-                if sync
-                else Explanation("Highlight sync state is unavailable.")
-            )
+            if sync is None:
+                preview["status"] = HighlightStatus.UNAVAILABLE
+                explanation = Explanation("Highlight sync state is unavailable.")
+            else:
+                preview["status"] = sync.status(preview["key"])
+                explanation = sync.explanation(preview["key"], token)
             preview["explanation"] = explanation.message
             preview["display_status"] = (
                 f"{preview['status']} · {explanation.waiting}"
@@ -798,11 +797,12 @@ class SessionsPanel(SyncPanel):
             bookwise_id or f"<Bookwise id for Calibre book {session.book_id}>"
         )
         record = entry.get("record")
-        item["publish_to_feed"] = (
-            sync.publish_to_feed(record)
-            if sync is not None and record is not None
-            else (sync.feed_default if sync else False)
-        )
+        if sync is None:
+            item["publish_to_feed"] = False
+        elif record is None:
+            item["publish_to_feed"] = sync.feed_default
+        else:
+            item["publish_to_feed"] = sync.publish_to_feed(record)
         body = json.dumps({"items": [item]}, indent=2)
         self.payload.setPlainText(f"{error}\n\n{body}" if error else body)
 
