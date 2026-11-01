@@ -93,6 +93,7 @@ class ReadwiseBooksAction(InterfaceAction):
         self.session_sync = None
         self.tracker = None
         self.books: dict[str, LibraryBook] = {}
+        self.unindexed: set[str] = set()  # annots keys not in this library
         self.dialog = None
         self.poll_failed = False
         self.polling = False
@@ -198,6 +199,7 @@ class ReadwiseBooksAction(InterfaceAction):
         self.highlight_token = prefs.get("token", "")
 
     def library_changed(self, db):
+        self.unindexed = set()
         self.index_library()
 
     def shutting_down(self):
@@ -218,9 +220,19 @@ class ReadwiseBooksAction(InterfaceAction):
         self.books = books
 
     def lookup_book(self, key: str) -> LibraryBook | None:
-        if key not in self.books:
-            self.index_library()  # a book added since the last index
-        return self.books.get(key)
+        return self.books.get(key)  # runs on the poll thread: no db access
+
+    def index_new_books(self):
+        """Re-index when the viewer has a book file this index doesn't know.
+
+        Runs on the GUI thread, which owns the library database. A key that
+        is still unknown afterwards (another library's book) is not retried.
+        """
+        unknown = {path.stem for path in ANNOTS_DIR.glob("*.json")}
+        unknown -= self.books.keys() | self.unindexed
+        if unknown:
+            self.index_library()
+            self.unindexed |= unknown - self.books.keys()
 
     def poll(self):
         """Every 2 seconds: run a tracker step off the GUI thread.
@@ -232,6 +244,7 @@ class ReadwiseBooksAction(InterfaceAction):
             return
         self.highlight_token = prefs.get("token", "")
         if not self.polling:
+            self.index_new_books()  # before the tracker looks the books up
             self.polling = True
             threading.Thread(target=self._poll_in_background, daemon=True).start()
         if self.dialog is not None and self.dialog.isVisible():
