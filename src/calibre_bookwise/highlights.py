@@ -53,6 +53,16 @@ class HighlightRejected(ReadwiseError):
     """Readwise rejected this payload; repeating it unchanged will not help."""
 
 
+def highlight_key(book_key: str, uuid: str) -> str:
+    """Sync state key for one annotation: annots file key, then Calibre's uuid."""
+    return f"{book_key}:{uuid}"
+
+
+def book_key_of(key: str) -> str:
+    """The annots file key a highlight_key belongs to."""
+    return key.split(":", 1)[0]
+
+
 def highlight_request(
     payload: dict, remote_id: int | None = None
 ) -> tuple[str, str, dict]:
@@ -127,7 +137,7 @@ def preview_highlights(
             method, url, body = highlight_request(payload)
             previews.append(
                 {
-                    "key": f"{path.stem}:{annotation['uuid']}"
+                    "key": highlight_key(path.stem, annotation["uuid"])
                     if annotation.get("uuid")
                     else None,
                     "book": book.title or "",
@@ -182,7 +192,7 @@ class HighlightSync:
                 for path in self.annots_dir.glob("*.json"):
                     for a in read_annotations(path):
                         if a.get("type") == "highlight" and a.get("uuid"):
-                            seen.add(f"{path.stem}:{a['uuid']}")
+                            seen.add(highlight_key(path.stem, a["uuid"]))
                 self.state["seen"] = sorted(seen)
             self.state["enabled"] = enabled
             self._save()
@@ -272,7 +282,7 @@ class HighlightSync:
                 for a in annotations:
                     if a.get("type") != "highlight" or not a.get("uuid"):
                         continue
-                    key = f"{path.stem}:{a['uuid']}"
+                    key = highlight_key(path.stem, a["uuid"])
                     item = items.get(key)
                     if key in seen and item is None:
                         continue  # pre-existing highlight, including edits to it
@@ -316,7 +326,7 @@ class HighlightSync:
                 ):
                     continue
                 # Don't upload queued books from a different active library.
-                if key.split(":", 1)[0] not in books:
+                if book_key_of(key) not in books:
                     continue
                 try:
                     remote_id = item.get("remote_id")
