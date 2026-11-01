@@ -112,7 +112,8 @@ class SessionSync:
     def _save(self):
         atomic_write_json(self.path, self.state, indent=2)
 
-    def _register(self, records: list[dict]):
+    def _register(self, records: list[dict]) -> bool:
+        """Add records not yet tracked; True if any were added."""
         added = False
         for record in records:
             key = record_key(record)
