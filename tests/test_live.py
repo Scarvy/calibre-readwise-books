@@ -149,6 +149,22 @@ def test_restart_keeps_open_saves_and_does_not_requeue_finished(env):
     assert len(restarted.finished_sessions()) == 2
 
 
+def test_crash_before_state_is_written_does_not_requeue_session(env):
+    t = tracker(env)
+    for second in (0, 30, 70):
+        read(env, second)
+        t.poll()
+    t.end_session()
+    t.state_path.unlink()  # Calibre died after the queue write, before state.json
+
+    restarted = tracker(env)
+    env[3].now = T0 + timedelta(minutes=20)
+
+    assert restarted.open_sessions() == []
+    assert restarted.poll() == []
+    assert len(restarted.finished_sessions()) == 1
+
+
 def test_dwell_with_viewer_focused_stays_one_session(env):
     t = tracker(env, viewer=lambda: ViewerState(True, frozenset({1}), frozenset({1})))
     for second in (0, 20, 20 + 7 * 60, 20 + 7 * 60 + 20):

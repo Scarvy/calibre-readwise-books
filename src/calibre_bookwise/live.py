@@ -93,6 +93,13 @@ class Tracker:
         self.finished_until: dict[str, str] = self._read_state().get(
             "finished_until", {}
         )
+        # sessions.jsonl is written before state.json, so after a crash between
+        # the two it knows of sessions the state lacks; never finish them twice.
+        for record in _read_jsonl(self.sessions_path):
+            done = self.finished_until.get(record["book_key"])
+            end = datetime.fromisoformat(record["end"])
+            if done is None or end > datetime.fromisoformat(done):
+                self.finished_until[record["book_key"]] = record["end"]
         # poll() runs on a background thread in the plugin; the UI reads too.
         self.lock = threading.RLock()
         self.focused: bool | None = None
