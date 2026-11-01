@@ -4,7 +4,7 @@ import pytest
 
 from calibre_bookwise.book_map import read_book_map, remember
 from calibre_bookwise.matching import CalibreBook
-from calibre_bookwise.readwise_api import ReadwiseError
+from calibre_bookwise.readwise_api import RateLimited, ReadwiseError
 from calibre_bookwise.session_sync import BooksClient, SessionSync
 
 
@@ -280,3 +280,39 @@ def test_created_book_is_remembered_for_metadata_sync(tmp_path):
     sync.set_mode("send", [])
     sync.poll([record()], BOOKS, FakeClient(remote_books=[]))
     assert read_book_map(tmp_path) == {7: 42}
+
+
+@pytest.mark.parametrize(
+    "refusal", [RateLimited(30), ReadwiseError("Token rejected", 401)]
+)
+def test_refused_session_post_waits_and_retries_by_itself(tmp_path, refusal):
+    now = [1000.0]
+    sync = SessionSync(tmp_path, [], clock=lambda: now[0])
+    sync.set_mode("send", [])
+
+    class RefusingClient(FakeClient):
+        def create_session(self, item):
+            raise refusal
+
+    entry = record()
+    sync.poll([entry], BOOKS, RefusingClient())
+    assert sync.status(entry)["status"] == "pending"
+    client = FakeClient()
+    sync.poll([entry], BOOKS, client)
+    assert not client.sessions  # waits out the delay
+    now[0] += 61
+    sync.poll([entry], BOOKS, client)
+    assert sync.status(entry)["status"] == "uploaded"
+
+
+def test_refused_book_creation_is_retried_not_held_for_review(tmp_path):
+    class RefusingBookClient(FakeClient):
+        def create_book(self, item):
+            raise RateLimited(30)
+
+    sync = SessionSync(tmp_path, [])
+    sync.set_mode("send", [])
+    entry = record()
+    sync.poll([entry], BOOKS, RefusingBookClient(remote_books=[]))
+    assert sync.status(entry)["status"] == "pending"
+    assert sync.state["retry_at"] > 0

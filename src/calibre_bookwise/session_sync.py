@@ -7,7 +7,7 @@ import time
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeGuard
 
 from .book_map import definite_links, read_book_map, remember
 from .bookwise import SessionStatus, local_timezone, session_item, skip_reason
@@ -18,6 +18,7 @@ from .readwise_api import (
     BASE_URL,
     ApiClient,
     Fetch,
+    RateLimited,
     ReadOnlyClient,
     ReadwiseError,
     urlopen,
@@ -68,6 +69,19 @@ class BooksClient(ApiClient):
             raise ReadwiseError(f"Readwise {path} error: {error}")
         except (ValueError, KeyError, TypeError) as error:
             raise ReadwiseError(f"Unexpected Readwise {path} response.") from error
+
+
+# Statuses where Readwise answered without acting on the request: a bad token
+# or a rate limit. Only these POST failures are certain to have created nothing.
+REFUSED = (401, 403, 429)
+
+
+def _refused(error: Exception | None) -> TypeGuard[ReadwiseError]:
+    return isinstance(error, ReadwiseError) and error.status in REFUSED
+
+
+def _retry_delay(error: Exception) -> float:
+    return error.delay if isinstance(error, RateLimited) else 60
 
 
 def record_key(record: dict) -> str:
@@ -259,7 +273,7 @@ class SessionSync:
                     break
                 except ReadwiseError as error:
                     item["error"] = str(error)
-                    self.state["retry_at"] = self.clock() + 60
+                    self.state["retry_at"] = self.clock() + _retry_delay(error)
                     self._save()
                     break
                 if not self._can_send(item):
@@ -282,7 +296,11 @@ class SessionSync:
                         upload_error = error
                     else:
                         upload_error = None
-                if upload_error is not None:
+                if _refused(upload_error):
+                    # Readwise turned the request away, so nothing was created.
+                    item.update(status=SessionStatus.PENDING, error=str(upload_error))
+                    self.state["retry_at"] = self.clock() + _retry_delay(upload_error)
+                elif upload_error is not None:
                     item.update(
                         status=SessionStatus.NEEDS_REVIEW, error=str(upload_error)
                     )
@@ -313,6 +331,8 @@ class SessionSync:
                     with unlocked(self.lock):
                         book_id = client.create_book(match.create_item)
                 except ReadwiseError as error:
+                    if _refused(error):
+                        raise  # nothing was created: an ordinary retry later
                     raise BookCreationUncertain(
                         f"Book creation outcome unknown: {error}. Check Readwise before retrying."
                     ) from error
