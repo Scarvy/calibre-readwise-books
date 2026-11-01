@@ -615,22 +615,19 @@ class HighlightsPanel(SyncPanel):
         ]
         self.fill_table(previews, values, select_first=True)
 
-    def local_keys(self, rows: list[dict]) -> list[str]:
-        return [
-            p["key"] for p in rows if p["key"] and p["status"] == HighlightStatus.LOCAL
-        ]
+    @staticmethod
+    def keys_with(rows: list[dict], status: HighlightStatus) -> list[str]:
+        return [p["key"] for p in rows if p["key"] and p["status"] == status]
 
     def show_payload(self):
         selected = self.selected_rows()
-        selected_keys = self.local_keys(selected)
-        rejected_keys = [
-            p["key"]
-            for p in selected
-            if p["key"] and p["status"] == HighlightStatus.REJECTED
-        ]
-        all_keys = self.local_keys(self.rows)
-        self.update_send_buttons(len(selected_keys), len(all_keys))
-        self.retry_button.setEnabled(bool(rejected_keys))
+        self.update_send_buttons(
+            len(self.keys_with(selected, HighlightStatus.LOCAL)),
+            len(self.keys_with(self.rows, HighlightStatus.LOCAL)),
+        )
+        self.retry_button.setEnabled(
+            bool(self.keys_with(selected, HighlightStatus.REJECTED))
+        )
         preview = self.payload_row()
         if preview is None:
             self.payload.setPlainText("Select a highlight to see its payload.")
@@ -644,18 +641,14 @@ class HighlightsPanel(SyncPanel):
             self.payload.setPlainText(content)
 
     def send_selected(self):
-        self.send_keys(self.local_keys(self.selected_rows()))
+        self.send_keys(self.keys_with(self.selected_rows(), HighlightStatus.LOCAL))
 
     def retry_selected(self):
-        keys = [
-            p["key"]
-            for p in self.selected_rows()
-            if p["key"] and p["status"] == HighlightStatus.REJECTED
-        ]
+        keys = self.keys_with(self.selected_rows(), HighlightStatus.REJECTED)
         self.send_keys(keys, retry=True)
 
     def send_all(self):
-        keys = self.local_keys(self.rows)
+        keys = self.keys_with(self.rows, HighlightStatus.LOCAL)
         if not keys:
             return
         if not question_dialog(
