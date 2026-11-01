@@ -77,7 +77,7 @@ def test_selected_local_session_sends_while_dry_run_remains_on(tmp_path):
     second = record("2026-10-30T11:00:00+00:00", "2026-10-30T11:05:00+00:00")
     second["end"] = "2026-10-30T11:04:00+00:00"
     sync = SessionSync(tmp_path, [first, second])
-    sync.queue_local(second)
+    sync.queue_locals([second])
     client = FakeClient()
     sync.poll([first, second], BOOKS, client)
     assert sync.state["mode"] == "dry_run"
@@ -91,7 +91,7 @@ def test_feed_toggle_applies_to_future_automatic_and_manual_uploads(tmp_path):
     local = record()
     sync = SessionSync(tmp_path, [local])
     sync.set_publish_to_feed(True)
-    sync.queue_local(local)
+    sync.queue_locals([local])
     assert sync.publish_to_feed(local) is True
     sync.set_mode("send", [local])
     future = record("2026-10-30T11:00:00+00:00", "2026-10-30T11:05:00+00:00")

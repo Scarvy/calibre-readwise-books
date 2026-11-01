@@ -193,10 +193,6 @@ class SessionSync:
                 record_key(record), {"status": record["status"]}
             )
 
-    def queue_local(self, record: dict):
-        """Send one selected local session even while automatic uploads are off."""
-        self.queue_locals([record])
-
     def queue_locals(self, records: list[dict]):
         """Queue an explicit selection atomically, without changing the mode."""
         with self.lock:
