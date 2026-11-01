@@ -5,12 +5,16 @@ writes are to this Calibre library's custom columns. The first run offers to
 create the columns, which Calibre needs a restart to show.
 """
 
-import json
 import traceback
 from pathlib import Path
 
 from calibre.gui2 import error_dialog, info_dialog, question_dialog
 from calibre.utils.config import JSONConfig
+from calibre_plugins.readwise_books.book_map import (
+    definite_links,
+    read_book_map,
+    remember,
+)
 from calibre_plugins.readwise_books.matching import (
     CalibreBook,
     calibre_book_from_db,
@@ -23,7 +27,6 @@ from calibre_plugins.readwise_books.metadata import (
 )
 from calibre_plugins.readwise_books.progress import viewer_position_at_progress
 from calibre_plugins.readwise_books.readwise_api import ReadOnlyClient, ReadwiseError
-from calibre_plugins.readwise_books.storage import atomic_write_json
 from qt.core import QInputDialog, QLineEdit, QThread, pyqtSignal
 
 prefs = JSONConfig("plugins/readwise_books")  # holds the Readwise API token
@@ -58,7 +61,7 @@ class SyncWorker(QThread):
 class MetadataSync:
     def __init__(self, gui, data_dir: Path):
         self.gui = gui
-        self.book_map_path = data_dir / "book_map.json"
+        self.data_dir = data_dir
         self.worker = None
 
     def set_token(self) -> bool:
@@ -84,7 +87,9 @@ class MetadataSync:
             return
         db = self.gui.current_db.new_api
         books = [calibre_book_from_db(db, book_id) for book_id in db.all_book_ids()]
-        self.worker = SyncWorker(self.gui, prefs["token"], books, self._saved())
+        self.worker = SyncWorker(
+            self.gui, prefs["token"], books, read_book_map(self.data_dir)
+        )
         self.worker.finished_sync.connect(self.apply)
         self.gui.status_bar.show_message("Readwise Books: syncing metadata…", 0)
         self.worker.start()
@@ -137,7 +142,7 @@ class MetadataSync:
         for label, values in updates.items():
             db.set_field(f"#{label}", values)
         self.gui.library_view.model().refresh_ids(list(updates["rw_status"]))
-        self._save(matches)
+        remember(self.data_dir, definite_links(matches))
         in_readwise = sum(
             1 for v in updates["rw_status"].values() if v != NOT_IN_READWISE
         )
@@ -207,19 +212,3 @@ class MetadataSync:
                 book_id, "EPUB", open_at=position
             )
         return True
-
-    def _saved(self) -> dict[int, int]:
-        try:
-            return {
-                int(k): v for k, v in json.loads(self.book_map_path.read_text()).items()
-            }
-        except (OSError, ValueError):
-            return {}
-
-    def _save(self, matches):
-        """Remember ISBN/ASIN matches; title matches are re-checked each sync."""
-        saved = self._saved()
-        for match in matches:
-            if match.matched_by in ("isbn", "asin"):
-                saved[match.book.calibre_id] = match.bookwise_id
-        atomic_write_json(self.book_map_path, saved, indent=2, sort_keys=True)

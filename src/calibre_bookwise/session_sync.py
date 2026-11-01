@@ -9,6 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from .book_map import definite_links, read_book_map, remember
 from .bookwise import SessionStatus, local_timezone, session_item, skip_reason
 from .live import session_from_record
 from .locking import unlocked
@@ -77,6 +78,7 @@ def record_key(record: dict) -> str:
 
 class SessionSync:
     def __init__(self, data_dir: Path, records: list[dict], clock=time.time):
+        self.data_dir = data_dir
         self.path = data_dir / "session_uploads.json"
         self.clock = clock
         self.lock = threading.RLock()
@@ -292,23 +294,29 @@ class SessionSync:
     ) -> int | None:
         if key in self.state["book_ids"]:
             return self.state["book_ids"][key]
-        with unlocked(self.lock):
-            remote_books = client.list_books()
-        if not self._can_send(item):
-            return None
-        [match] = plan_matches([book], remote_books)
-        if match.bookwise_id is not None:
-            book_id = match.bookwise_id
-        elif match.create_item is not None:
-            try:
-                with unlocked(self.lock):
-                    book_id = client.create_book(match.create_item)
-            except ReadwiseError as error:
-                raise BookCreationUncertain(
-                    f"Book creation outcome unknown: {error}. Check Readwise before retrying."
-                ) from error
+        saved = read_book_map(self.data_dir)  # links metadata sync has made
+        if book.calibre_id in saved:
+            book_id = saved[book.calibre_id]
         else:
-            return None
+            with unlocked(self.lock):
+                remote_books = client.list_books()
+            if not self._can_send(item):
+                return None
+            [match] = plan_matches([book], remote_books)
+            if match.bookwise_id is not None:
+                book_id = match.bookwise_id
+                remember(self.data_dir, definite_links([match]))
+            elif match.create_item is not None:
+                try:
+                    with unlocked(self.lock):
+                        book_id = client.create_book(match.create_item)
+                except ReadwiseError as error:
+                    raise BookCreationUncertain(
+                        f"Book creation outcome unknown: {error}. Check Readwise before retrying."
+                    ) from error
+                remember(self.data_dir, {book.calibre_id: book_id})
+            else:
+                return None
         self.state["book_ids"][key] = book_id
         self._save()
         return book_id

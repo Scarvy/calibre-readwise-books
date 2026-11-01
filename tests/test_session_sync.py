@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from calibre_bookwise.book_map import read_book_map, remember
 from calibre_bookwise.matching import CalibreBook
 from calibre_bookwise.readwise_api import ReadwiseError
 from calibre_bookwise.session_sync import BooksClient, SessionSync
@@ -257,3 +258,25 @@ def test_settings_and_book_ids_are_readable_without_touching_state(tmp_path):
         True,
         42,
     )
+
+
+def test_book_linked_by_metadata_sync_is_used_without_lookup(tmp_path):
+    remember(tmp_path, {7: 555})
+    sync = SessionSync(tmp_path, [])
+    sync.set_mode("send", [])
+
+    class NoLookups(FakeClient):
+        def list_books(self):
+            raise AssertionError("the saved link should be used")
+
+    client = NoLookups()
+    sync.poll([record()], BOOKS, client)
+    assert client.sessions[0]["book_id"] == 555
+    assert not client.created_books
+
+
+def test_created_book_is_remembered_for_metadata_sync(tmp_path):
+    sync = SessionSync(tmp_path, [])
+    sync.set_mode("send", [])
+    sync.poll([record()], BOOKS, FakeClient(remote_books=[]))
+    assert read_book_map(tmp_path) == {7: 42}
