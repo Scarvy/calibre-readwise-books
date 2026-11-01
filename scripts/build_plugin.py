@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 IMPORT_NAME = "readwise_books"  # plugins import as calibre_plugins.<this>
 PLUGIN_FILES = ["__init__.py", "ui.py", "metadata_sync.py", "images/readwise-books.png"]
 SOURCE_DIR = ROOT / "src" / "calibre_bookwise"
+NOT_PACKAGED = {"__init__.py", "diagnostics.py"}  # diagnostics serve scripts/ only
 
 
 def build(output: Path | None = None, release: bool = False) -> Path:
@@ -29,7 +30,7 @@ def build(output: Path | None = None, release: bool = False) -> Path:
             f'BUILD_CHANNEL = "{channel}"\nIS_DEV = BUILD_CHANNEL == "development"\n',
         )
         for module in sorted(SOURCE_DIR.glob("*.py")):
-            if module.name != "__init__.py":
+            if module.name not in NOT_PACKAGED:
                 plugin.write(module, module.name)
     return output
 

@@ -2,14 +2,13 @@ import sqlite3
 
 import pytest
 
+from calibre_bookwise.diagnostics import create_requests, read_calibre_books
 from calibre_bookwise.matching import (
     CalibreBook,
     calibre_book_from_db,
-    create_requests,
     main_title,
     normalize_isbn,
     plan_matches,
-    read_calibre_books,
 )
 
 JAVASCRIPT = {

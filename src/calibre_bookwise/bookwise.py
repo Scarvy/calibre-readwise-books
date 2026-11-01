@@ -14,7 +14,6 @@ from .sessions import Session
 MIN_DURATION = timedelta(minutes=1)
 # The API rejects sessions where ended_at is more than 24h after started_at.
 MAX_DURATION = timedelta(hours=24)
-BATCH_SIZE = 10  # the API takes at most 10 sessions per request
 
 
 class SessionStatus(StrEnum):

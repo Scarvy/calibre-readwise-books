@@ -12,7 +12,8 @@ import argparse
 import os
 from pathlib import Path
 
-from calibre_bookwise.matching import plan_matches, read_calibre_books
+from calibre_bookwise.diagnostics import read_calibre_books
+from calibre_bookwise.matching import plan_matches
 from calibre_bookwise.metadata import COLUMNS, column_updates
 from calibre_bookwise.readwise_api import ReadOnlyClient
 

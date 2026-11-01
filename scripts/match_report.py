@@ -11,7 +11,8 @@ import argparse
 import json
 from pathlib import Path
 
-from calibre_bookwise.matching import create_requests, plan_matches, read_calibre_books
+from calibre_bookwise.diagnostics import create_requests, read_calibre_books
+from calibre_bookwise.matching import plan_matches
 
 DEFAULT_LIBRARY = Path.home() / "Calibre Library"
 
