@@ -7,6 +7,7 @@ from calibre_bookwise.highlights import (
     HighlightRejected,
     HighlightSync,
     RateLimited,
+    Waiting,
     preview_highlights,
 )
 from calibre_bookwise.matching import CalibreBook
@@ -257,7 +258,7 @@ def test_rejected_highlight_stops_retrying_and_shows_reason(setup):
     sync.poll(books, client)
     assert client.calls == 1
     assert sync.status("book:one") == "rejected"
-    assert "bad note" in sync.explanation("book:one", True)
+    assert "bad note" in sync.explanation("book:one", True).message
     write(path, highlight(notes="Corrected"))
     sync.retry_rejected(["book:one"], books)
     sync.poll(books, FakeClient())
@@ -290,3 +291,27 @@ def test_missing_remote_id_is_not_acknowledged():
     )
     with pytest.raises(ReadwiseError, match="no unique highlight ID"):
         client.send({"text": "Passage"})
+
+
+def test_explanation_says_why_a_pending_highlight_waits(setup):
+    sync, path, _now, books = setup
+    write(path, highlight())
+    sync.queue_saved(["book:one"], books)
+
+    assert sync.explanation("book:one", False).waiting == Waiting.TOKEN
+    sync.set_enabled(True)
+    write(path, highlight(), highlight("new"))
+    sync.poll(books, None)
+    assert sync.explanation("book:new", True).waiting == Waiting.SETTLING
+    sync.set_enabled(False)
+    assert sync.explanation("book:new", True).waiting == Waiting.PAUSED
+
+    class Offline:
+        def send(self, payload, remote_id=None):
+            raise ReadwiseError("Couldn't reach Readwise")
+
+    sync.poll(books, Offline())
+    assert sync.explanation("book:one", True) == (
+        "Couldn't reach Readwise",
+        Waiting.RETRY,
+    )

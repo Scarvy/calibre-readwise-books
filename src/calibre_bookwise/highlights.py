@@ -11,7 +11,7 @@ import time
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from .matching import CalibreBook
 from .readwise_api import ApiClient, RateLimited, ReadwiseError
@@ -31,6 +31,20 @@ class HighlightStatus(StrEnum):
     REMOVED = "removed locally"  # deleted in Calibre; kept in Readwise
     INVALID = "invalid"  # over Readwise's limits; waits for an edit
     REJECTED = "rejected"  # Readwise refused it; retry only by hand
+
+
+class Waiting(StrEnum):
+    """Why a pending highlight has not been sent yet, for the status column."""
+
+    RETRY = "retry"  # the last attempt failed and will be repeated
+    TOKEN = "token needed"
+    PAUSED = "paused"  # automatic upload is off and it wasn't sent by hand
+    SETTLING = "settling"  # the viewer may still be saving it
+
+
+class Explanation(NamedTuple):
+    message: str  # for the user
+    waiting: Waiting | None = None
 
 
 class HighlightSender(Protocol):
@@ -216,33 +230,32 @@ class HighlightSync:
         with self.lock:
             return self.state["items"].get(key, {}).get("status", HighlightStatus.LOCAL)
 
-    def entry(self, key: str | None) -> dict:
-        if key is None:
-            return {}
-        with self.lock:
-            return self.state["items"].get(key, {}).copy()
-
-    def explanation(self, key: str | None, token_available: bool) -> str:
+    def explanation(self, key: str | None, token_available: bool) -> Explanation:
         """Why this highlight is waiting, or why Readwise rejected it."""
         if key is None:
-            return "Calibre did not save an annotation ID for this highlight."
+            return Explanation(
+                "Calibre did not save an annotation ID for this highlight."
+            )
         with self.lock:
             item = self.state["items"].get(key)
             if item is None:
-                return "Saved locally. Select it to upload."
+                return Explanation("Saved locally. Select it to upload.")
+            pending = item.get("status") == HighlightStatus.PENDING
             if item.get("error"):
-                return item["error"]
-            if item.get("status") != HighlightStatus.PENDING:
-                return ""
+                return Explanation(item["error"], Waiting.RETRY if pending else None)
+            if not pending:
+                return Explanation("")
             if not token_available:
-                return "Waiting for a Readwise token."
+                return Explanation("Waiting for a Readwise token.", Waiting.TOKEN)
             if not self.state["enabled"] and not item.get("manual"):
-                return "Automatic upload is paused."
+                return Explanation("Automatic upload is paused.", Waiting.PAUSED)
             if self.clock() < item.get("ready_at", 0):
-                return "Waiting for the highlight to finish saving."
+                return Explanation(
+                    "Waiting for the highlight to finish saving.", Waiting.SETTLING
+                )
             if self.clock() < self.state.get("retry_at", 0):
-                return "Waiting for the next retry."
-            return "Queued for the next upload attempt."
+                return Explanation("Waiting for the next retry.")
+            return Explanation("Queued for the next upload attempt.")
 
     def queue_saved(self, keys: list[str], books: Mapping[str, CalibreBook]):
         """Queue chosen older highlights, including while automatic upload is off."""

@@ -24,6 +24,7 @@ from calibre_plugins.readwise_books.bookwise import (
 )
 from calibre_plugins.readwise_books.build_info import IS_DEV
 from calibre_plugins.readwise_books.highlights import (
+    Explanation,
     HighlightClient,
     HighlightStatus,
     HighlightSync,
@@ -557,21 +558,17 @@ class HighlightsPanel(SyncPanel):
             preview["status"] = (
                 sync.status(preview["key"]) if sync else HighlightStatus.UNAVAILABLE
             )
-            preview["explanation"] = (
+            explanation = (
                 sync.explanation(preview["key"], bool(prefs.get("token")))
                 if sync
-                else "Highlight sync state is unavailable."
+                else Explanation("Highlight sync state is unavailable.")
             )
-            preview["display_status"] = preview["status"]
-            if preview["status"] == HighlightStatus.PENDING:
-                if sync and sync.entry(preview["key"]).get("error"):
-                    preview["display_status"] = "pending · retry"
-                elif "paused" in preview["explanation"]:
-                    preview["display_status"] = "pending · paused"
-                elif "token" in preview["explanation"]:
-                    preview["display_status"] = "pending · token needed"
-                elif "finish saving" in preview["explanation"]:
-                    preview["display_status"] = "pending · settling"
+            preview["explanation"] = explanation.message
+            preview["display_status"] = (
+                f"{preview['status']} · {explanation.waiting}"
+                if explanation.waiting
+                else preview["status"]
+            )
         signature = [
             (
                 p["key"],
