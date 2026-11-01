@@ -197,7 +197,7 @@ class ReadwiseBooksAction(InterfaceAction):
                 show=True,
             )
         self.timer.start(POLL_MS)
-        self.highlight_token = prefs.get("token", "")
+        self.token = prefs.get("token", "")
 
     def library_changed(self, db):
         self.unindexed = set()
@@ -244,7 +244,7 @@ class ReadwiseBooksAction(InterfaceAction):
         if self.tracker is None:
             return
         self.report_poll_failure()
-        self.highlight_token = prefs.get("token", "")
+        self.token = prefs.get("token", "")
         if not self.polling:
             self.index_new_books()  # before the tracker looks the books up
             self.polling = True
@@ -268,18 +268,12 @@ class ReadwiseBooksAction(InterfaceAction):
         try:
             self.tracker.poll()
             if self.session_sync is not None:
-                client = (
-                    BooksClient(self.highlight_token) if self.highlight_token else None
-                )
+                client = BooksClient(self.token) if self.token else None
                 self.session_sync.poll(
                     self.tracker.finished_sessions(), self.books.copy(), client
                 )
             if self.highlights is not None:
-                client = (
-                    HighlightClient(self.highlight_token)
-                    if self.highlight_token
-                    else None
-                )
+                client = HighlightClient(self.token) if self.token else None
                 self.highlights.poll(self.books.copy(), client)
             self.poll_failed = False
         # A tracker bug must never break the plugin: log it once and keep going.
