@@ -28,7 +28,7 @@ from calibre_plugins.readwise_books.highlights import (
     HighlightClient,
     HighlightStatus,
     HighlightSync,
-    preview_highlights,
+    PreviewCache,
 )
 from calibre_plugins.readwise_books.live import (
     Tracker,
@@ -520,6 +520,7 @@ class HighlightsPanel(SyncPanel):
 
     def __init__(self, parent, action: ReadwiseBooksAction):
         super().__init__(parent, action)
+        self.previews = PreviewCache(ANNOTS_DIR)
         self.signature = None
         self.mode_label = QLabel(self)
         self.errors_label = QLabel(self)
@@ -544,7 +545,7 @@ class HighlightsPanel(SyncPanel):
 
     def refresh(self):
         sync = self.action.highlights
-        previews, errors = preview_highlights(ANNOTS_DIR, self.action.books.copy())
+        previews, errors = self.previews.get(self.action.books)
         for preview in previews:
             preview["status"] = (
                 sync.status(preview["key"]) if sync else HighlightStatus.UNAVAILABLE
@@ -719,15 +720,17 @@ class SessionsPanel(SyncPanel):
             {"session": session, "status": "reading…"}
             for session in tracker.open_sessions()
         ]
-        finished_rows = [
-            {
-                "session": session_from_record(record),
-                "record": record,
-                "status": sync.status(record)["status"] if sync else record["status"],
-                "error": sync.status(record).get("error", "") if sync else "",
-            }
-            for record in reversed(tracker.finished_sessions())
-        ]
+        finished_rows = []
+        for record in reversed(tracker.finished_sessions()):
+            status = sync.status(record) if sync else {"status": record["status"]}
+            finished_rows.append(
+                {
+                    "session": session_from_record(record),
+                    "record": record,
+                    "status": status["status"],
+                    "error": status.get("error", ""),
+                }
+            )
         rows: list[dict[str, Any]] = open_rows + finished_rows
         values = []
         for entry in rows:

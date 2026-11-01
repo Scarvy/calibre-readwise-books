@@ -97,7 +97,9 @@ class Tracker:
         )
         # sessions.jsonl is written before state.json, so after a crash between
         # the two it knows of sessions the state lacks; never finish them twice.
-        for record in _read_jsonl(self.sessions_path):
+        # Finished sessions, oldest first; sessions.jsonl is only appended to.
+        self.finished = _read_jsonl(self.sessions_path)
+        for record in self.finished:
             done = self.finished_until.get(record["book_key"])
             end = datetime.fromisoformat(record["end"])
             if done is None or end > datetime.fromisoformat(done):
@@ -153,7 +155,7 @@ class Tracker:
 
     def finished_sessions(self) -> list[dict]:
         with self.lock:
-            return _read_jsonl(self.sessions_path)
+            return list(self.finished)
 
     def _sessions(self) -> list[Session]:
         by_book: dict[str, list] = {}
@@ -226,6 +228,7 @@ class Tracker:
             record = _session_record(session, now)
             with self.sessions_path.open("a") as queue:
                 queue.write(json.dumps(record) + "\n")
+            self.finished.append(record)
             self.finished_until[session.book_key] = session.end.isoformat()
             finished.append(record)
         if finished:

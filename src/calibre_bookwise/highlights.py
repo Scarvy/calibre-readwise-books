@@ -182,6 +182,37 @@ def preview_highlights(
     return previews, errors
 
 
+class PreviewCache:
+    """preview_highlights for a window that refreshes every half second.
+
+    Re-reads the annotation files only when one changes or the library does.
+    Callers may add fields to the returned previews but not change payloads.
+    """
+
+    def __init__(self, annots_dir: Path):
+        self.annots_dir = annots_dir
+        self._stamp: object = None
+        self._books: Mapping[str, CalibreBook] | None = None
+        self._result: tuple[list[dict], list[str]] = ([], [])
+
+    def get(self, books: Mapping[str, CalibreBook]) -> tuple[list[dict], list[str]]:
+        stamp = self._files_stamp()
+        if stamp is None or stamp != self._stamp or books is not self._books:
+            self._result = preview_highlights(self.annots_dir, books)
+            self._stamp, self._books = stamp, books
+        return self._result
+
+    def _files_stamp(self) -> tuple | None:
+        files = []
+        try:
+            for path in self.annots_dir.glob("*.json"):
+                stat = path.stat()
+                files.append((path.name, stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            return None  # a file vanished mid-scan: just read them again
+        return tuple(sorted(files))
+
+
 class HighlightSync:
     def __init__(self, data_dir: Path, annots_dir: Path, clock=time.time):
         self.path = data_dir / "highlights.json"

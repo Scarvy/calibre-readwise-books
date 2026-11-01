@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -6,6 +7,7 @@ from calibre_bookwise.highlights import (
     HighlightClient,
     HighlightRejected,
     HighlightSync,
+    PreviewCache,
     RateLimited,
     Waiting,
     preview_highlights,
@@ -329,3 +331,16 @@ def test_summary_counts_statuses_and_lists_distinct_errors(setup):
     sync.poll(books, Offline())
     assert sync.enabled is False
     assert sync.summary() == ({"pending": 2}, ["Couldn't reach Readwise"])
+
+
+def test_preview_cache_rereads_only_when_a_file_or_the_library_changes(setup):
+    _sync, path, _now, books = setup
+    write(path, highlight())
+    cache = PreviewCache(path.parent)
+
+    first = cache.get(books)
+    assert cache.get(books) is first
+    write(path, highlight(), highlight("two"))
+    os.utime(path, ns=(1, 1))  # a new mtime even on coarse clocks
+    assert len(cache.get(books)[0]) == 2
+    assert cache.get(dict(books)) is not cache.get(books)

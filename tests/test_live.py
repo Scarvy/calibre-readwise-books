@@ -322,3 +322,13 @@ def test_finished_reading_is_dropped_from_memory_but_focus_carries_over(env):
     [session] = t.open_sessions()
     assert session.saves == 3
     assert len(tracker(env).finished_sessions()) == 3
+
+
+def test_finished_sessions_come_from_memory_after_start(env):
+    t = tracker(env)
+    read(env, 0)
+    t.poll()
+    [record] = t.end_session()
+    t.sessions_path.unlink()  # not read again while running
+
+    assert t.finished_sessions() == [record]
