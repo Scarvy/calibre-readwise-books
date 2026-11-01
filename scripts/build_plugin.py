@@ -24,7 +24,10 @@ def build(output: Path | None = None, release: bool = False) -> Path:
         plugin.writestr(f"plugin-import-name-{IMPORT_NAME}.txt", "")
         for name in PLUGIN_FILES:
             plugin.write(ROOT / "plugin" / name, name)
-        plugin.writestr("build_info.py", f'BUILD_CHANNEL = "{channel}"\n')
+        plugin.writestr(
+            "build_info.py",
+            f'BUILD_CHANNEL = "{channel}"\nIS_DEV = BUILD_CHANNEL == "development"\n',
+        )
         for module in sorted(SOURCE_DIR.glob("*.py")):
             if module.name != "__init__.py":
                 plugin.write(module, module.name)

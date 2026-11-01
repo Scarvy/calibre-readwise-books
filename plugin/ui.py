@@ -20,7 +20,7 @@ from calibre_plugins.readwise_books.bookwise import (
     session_item,
     skip_reason,
 )
-from calibre_plugins.readwise_books.build_info import BUILD_CHANNEL
+from calibre_plugins.readwise_books.build_info import IS_DEV
 from calibre_plugins.readwise_books.highlights import (
     HighlightClient,
     HighlightSync,
@@ -73,10 +73,10 @@ VIEWER_CACHE = Path(cache_dir()) / "ev2"
 class ReadwiseBooksAction(InterfaceAction):
     name = "Readwise Books"
     action_spec = (
-        "Readwise Books [DEV]" if BUILD_CHANNEL == "development" else "Readwise Books",
+        "Readwise Books [DEV]" if IS_DEV else "Readwise Books",
         None,  # icon set in genesis from the plugin's own images/
         "Development build of Readwise Books"
-        if BUILD_CHANNEL == "development"
+        if IS_DEV
         else "Reading sessions for Readwise Books",
         None,
     )
@@ -94,7 +94,7 @@ class ReadwiseBooksAction(InterfaceAction):
         # get_icons is provided by Calibre to plugin code at runtime.
         self.qaction.setIcon(get_icons(ICON, "Readwise Books"))  # noqa: F821
         menu = QMenu(self.gui)
-        if BUILD_CHANNEL == "development":
+        if IS_DEV:
             build_action = menu.addAction("DEV BUILD · installed from a local build")
             build_action.setIcon(QIcon.ic("debug.png"))
             build_action.setEnabled(False)
@@ -135,7 +135,7 @@ class ReadwiseBooksAction(InterfaceAction):
         developer_menu = settings_menu.addMenu("Developer")
         developer_menu.setIcon(QIcon.ic("debug.png"))
         channel_action = developer_menu.addAction(
-            "Build: Development" if BUILD_CHANNEL == "development" else "Build: Release"
+            "Build: Development" if IS_DEV else "Build: Release"
         )
         channel_action.setEnabled(False)
         developer_menu.addSeparator()
