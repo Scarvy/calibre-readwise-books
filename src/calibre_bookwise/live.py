@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .bookwise import skip_reason
+from .bookwise import SessionStatus, skip_reason
 from .matching import LibraryBook
 from .sessions import (
     DEFAULT_DWELL_LIMIT,
@@ -315,7 +315,7 @@ def _session_record(session: Session, now: datetime) -> dict:
         finished_at=now.isoformat(),
     )
     reason = skip_reason(session)
-    record["status"] = "skipped" if reason else "pending"
+    record["status"] = SessionStatus.SKIPPED if reason else SessionStatus.PENDING
     record["skip_reason"] = reason
     return record
 

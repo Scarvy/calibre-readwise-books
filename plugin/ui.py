@@ -17,6 +17,7 @@ from calibre.constants import cache_dir, config_dir
 from calibre.gui2 import error_dialog, info_dialog, open_local_file, question_dialog
 from calibre.gui2.actions import InterfaceAction
 from calibre_plugins.readwise_books.bookwise import (
+    SessionStatus,
     local_timezone,
     session_item,
     skip_reason,
@@ -24,6 +25,7 @@ from calibre_plugins.readwise_books.bookwise import (
 from calibre_plugins.readwise_books.build_info import IS_DEV
 from calibre_plugins.readwise_books.highlights import (
     HighlightClient,
+    HighlightStatus,
     HighlightSync,
     preview_highlights,
 )
@@ -37,6 +39,7 @@ from calibre_plugins.readwise_books.metadata_sync import MetadataSync, prefs
 from calibre_plugins.readwise_books.progress import book_progress
 from calibre_plugins.readwise_books.session_sync import (
     BooksClient,
+    SessionMode,
     SessionSync,
     record_key,
 )
@@ -180,7 +183,7 @@ class ReadwiseBooksAction(InterfaceAction):
         try:
             self.session_sync = SessionSync(DATA_DIR, self.tracker.finished_sessions())
             self.session_send_action.setChecked(
-                self.session_sync.state["mode"] == "send"
+                self.session_sync.state["mode"] == SessionMode.SEND
             )
             self.feed_action.setChecked(
                 self.session_sync.state.get("publish_to_feed", False)
@@ -270,9 +273,10 @@ class ReadwiseBooksAction(InterfaceAction):
             available=sync is not None and tracker is not None,
             needs_token=enabled,
             apply=lambda: sync.set_mode(
-                "send" if enabled else "dry_run", tracker.finished_sessions()
+                SessionMode.SEND if enabled else SessionMode.DRY_RUN,
+                tracker.finished_sessions(),
             ),
-            saved=lambda: sync.state["mode"] == "send",
+            saved=lambda: sync.state["mode"] == SessionMode.SEND,
             failure_title="Session mode unavailable",
             failure_message="Could not save the session mode.",
         )
@@ -550,14 +554,16 @@ class HighlightsPanel(SyncPanel):
         sync = self.action.highlights
         previews, errors = preview_highlights(ANNOTS_DIR, self.action.books.copy())
         for preview in previews:
-            preview["status"] = sync.status(preview["key"]) if sync else "unavailable"
+            preview["status"] = (
+                sync.status(preview["key"]) if sync else HighlightStatus.UNAVAILABLE
+            )
             preview["explanation"] = (
                 sync.explanation(preview["key"], bool(prefs.get("token")))
                 if sync
                 else "Highlight sync state is unavailable."
             )
             preview["display_status"] = preview["status"]
-            if preview["status"] == "pending":
+            if preview["status"] == HighlightStatus.PENDING:
                 if sync and sync.entry(preview["key"]).get("error"):
                     preview["display_status"] = "pending · retry"
                 elif "paused" in preview["explanation"]:
@@ -600,13 +606,17 @@ class HighlightsPanel(SyncPanel):
         self.fill_table(previews, values, select_first=True)
 
     def local_keys(self, rows: list[dict]) -> list[str]:
-        return [p["key"] for p in rows if p["key"] and p["status"] == "local"]
+        return [
+            p["key"] for p in rows if p["key"] and p["status"] == HighlightStatus.LOCAL
+        ]
 
     def show_payload(self):
         selected = self.selected_rows()
         selected_keys = self.local_keys(selected)
         rejected_keys = [
-            p["key"] for p in selected if p["key"] and p["status"] == "rejected"
+            p["key"]
+            for p in selected
+            if p["key"] and p["status"] == HighlightStatus.REJECTED
         ]
         all_keys = self.local_keys(self.rows)
         self.update_send_buttons(len(selected_keys), len(all_keys))
@@ -630,7 +640,7 @@ class HighlightsPanel(SyncPanel):
         keys = [
             p["key"]
             for p in self.selected_rows()
-            if p["key"] and p["status"] == "rejected"
+            if p["key"] and p["status"] == HighlightStatus.REJECTED
         ]
         self.send_keys(keys, retry=True)
 
@@ -707,7 +717,7 @@ class SessionsPanel(SyncPanel):
         if tracker is None:
             return
         sync = self.action.session_sync
-        sending = sync is not None and sync.state["mode"] == "send"
+        sending = sync is not None and sync.state["mode"] == SessionMode.SEND
         self.feed_checkbox.blockSignals(True)
         self.feed_checkbox.setChecked(
             sync is not None and sync.state.get("publish_to_feed", False)
@@ -737,7 +747,7 @@ class SessionsPanel(SyncPanel):
         for entry in rows:
             session = entry["session"]
             status = entry["status"]
-            if status == "skipped":
+            if status == SessionStatus.SKIPPED:
                 status = f"skipped: {skip_reason(session)}"
             values.append(
                 (
@@ -759,7 +769,7 @@ class SessionsPanel(SyncPanel):
             record
             for entry in rows
             if (record := entry.get("record")) is not None
-            and sync.status(record)["status"] == "local"
+            and sync.status(record)["status"] == SessionStatus.LOCAL
             and entry["session"].book_key in self.action.books
             and skip_reason(entry["session"]) is None
         ]
@@ -833,7 +843,10 @@ class SessionsPanel(SyncPanel):
         if sync is None or not 0 <= row < len(self.rows):
             return
         record = self.rows[row].get("record")
-        if record is None or sync.status(record)["status"] != "needs review":
+        if (
+            record is None
+            or sync.status(record)["status"] != SessionStatus.NEEDS_REVIEW
+        ):
             return
         if not question_dialog(
             self,

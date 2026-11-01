@@ -5,10 +5,11 @@ import json
 import threading
 import time
 from collections.abc import Mapping
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
-from .bookwise import local_timezone, session_item, skip_reason
+from .bookwise import SessionStatus, local_timezone, session_item, skip_reason
 from .live import session_from_record
 from .matching import CalibreBook, plan_matches
 from .readwise_api import (
@@ -20,6 +21,11 @@ from .readwise_api import (
     urlopen,
 )
 from .storage import atomic_write_json
+
+
+class SessionMode(StrEnum):
+    DRY_RUN = "dry_run"  # finished sessions stay local unless sent by hand
+    SEND = "send"  # newly finished sessions are queued to send
 
 
 class SessionSender(Protocol):
@@ -77,7 +83,7 @@ class SessionSync:
             self.state: dict[str, Any] = json.loads(self.path.read_text())
         else:
             self.state = {
-                "mode": "dry_run",
+                "mode": SessionMode.DRY_RUN,
                 "publish_to_feed": False,
                 "items": {},
                 "book_ids": {},
@@ -87,15 +93,15 @@ class SessionSync:
             self._save()
         if (
             not isinstance(self.state, dict)
-            or self.state.get("mode") not in ("dry_run", "send")
+            or self.state.get("mode") not in tuple(SessionMode)
             or not isinstance(self.state.get("items"), dict)
             or not isinstance(self.state.get("book_ids"), dict)
         ):
             raise ValueError("Invalid session upload state; restore from backup.")
         for item in self.state["items"].values():
-            if item.get("status") == "sending":
+            if item.get("status") == SessionStatus.SENDING:
                 item.update(
-                    status="needs review",
+                    status=SessionStatus.NEEDS_REVIEW,
                     error="Upload outcome unknown after interruption; check Readwise before retrying.",
                 )
                 self._save()
@@ -110,9 +116,13 @@ class SessionSync:
             if key not in self.state["items"]:
                 added = True
                 self.state["items"][key] = {
-                    "status": "skipped"
-                    if record["status"] == "skipped"
-                    else ("pending" if self.state["mode"] == "send" else "local"),
+                    "status": SessionStatus.SKIPPED
+                    if record["status"] == SessionStatus.SKIPPED
+                    else (
+                        SessionStatus.PENDING
+                        if self.state["mode"] == SessionMode.SEND
+                        else SessionStatus.LOCAL
+                    ),
                     "error": "",
                     "publish_to_feed": self.state.get("publish_to_feed", False),
                 }
@@ -133,21 +143,21 @@ class SessionSync:
         """The feed setting a preview or pending upload will use."""
         with self.lock:
             item = self.state["items"].get(record_key(record), {})
-            if item.get("status") == "local":
+            if item.get("status") == SessionStatus.LOCAL:
                 return self.state.get("publish_to_feed", False)
             return item.get("publish_to_feed", False)
 
     def set_mode(self, mode: str, records: list[dict]):
-        if mode not in ("dry_run", "send"):
+        if mode not in tuple(SessionMode):
             raise ValueError("Invalid session mode")
         with self.lock:
             # Anything already recorded before the mode change stays local.
-            self.state["mode"] = "dry_run"
+            self.state["mode"] = SessionMode.DRY_RUN
             self._register(records)
-            if mode == "dry_run":
+            if mode == SessionMode.DRY_RUN:
                 for item in self.state["items"].values():
-                    if item["status"] == "pending":
-                        item["status"] = "local"
+                    if item["status"] == SessionStatus.PENDING:
+                        item["status"] = SessionStatus.LOCAL
             self.state["mode"] = mode
             self._save()
 
@@ -167,13 +177,14 @@ class SessionSync:
             self._register(records)
             items = [self.state["items"][record_key(record)] for record in records]
             if not records or any(
-                item["status"] != "local" or skip_reason(session_from_record(record))
+                item["status"] != SessionStatus.LOCAL
+                or skip_reason(session_from_record(record))
                 for item, record in zip(items, records)
             ):
                 raise ValueError("Select eligible local sessions to send.")
             for item in items:
                 item.update(
-                    status="pending",
+                    status=SessionStatus.PENDING,
                     manual=True,
                     error="",
                     publish_to_feed=self.state.get("publish_to_feed", False),
@@ -181,16 +192,16 @@ class SessionSync:
             self._save()
 
     def _can_send(self, item: dict) -> bool:
-        return item["status"] == "pending" and (
-            self.state["mode"] == "send" or item.get("manual", False)
+        return item["status"] == SessionStatus.PENDING and (
+            self.state["mode"] == SessionMode.SEND or item.get("manual", False)
         )
 
     def retry_after_review(self, record: dict):
         with self.lock:
             item = self.state["items"][record_key(record)]
-            if item["status"] != "needs review":
+            if item["status"] != SessionStatus.NEEDS_REVIEW:
                 raise ValueError("Only sessions needing review can be retried.")
-            item.update(status="pending", manual=True, error="")
+            item.update(status=SessionStatus.PENDING, manual=True, error="")
             self.state["retry_at"] = 0
             self._save()
 
@@ -215,13 +226,13 @@ class SessionSync:
                     continue  # wait for the originating library to be active
                 session = session_from_record(record)
                 if reason := skip_reason(session):
-                    item.update(status="skipped", error=reason)
+                    item.update(status=SessionStatus.SKIPPED, error=reason)
                     self._save()
                     break
                 try:
                     book_id = self._book_id(record["book_key"], book, item, client)
                 except BookCreationUncertain as error:
-                    item.update(status="needs review", error=str(error))
+                    item.update(status=SessionStatus.NEEDS_REVIEW, error=str(error))
                     self._save()
                     break
                 except ReadwiseError as error:
@@ -233,13 +244,14 @@ class SessionSync:
                     break  # mode changed while the book lookup was in flight
                 if book_id is None:
                     item.update(
-                        status="needs review", error="Cannot match or create this book."
+                        status=SessionStatus.NEEDS_REVIEW,
+                        error="Cannot match or create this book.",
                     )
                     self._save()
                     break
                 payload = session_item(session, book_id, local_timezone())
                 payload["publish_to_feed"] = item.get("publish_to_feed", False)
-                item.update(status="sending", error="")
+                item.update(status=SessionStatus.SENDING, error="")
                 self._save()  # a crash or ambiguous response must not resend
                 self.lock.release()
                 try:
@@ -251,9 +263,11 @@ class SessionSync:
                 finally:
                     self.lock.acquire()
                 if upload_error is not None:
-                    item.update(status="needs review", error=str(upload_error))
+                    item.update(
+                        status=SessionStatus.NEEDS_REVIEW, error=str(upload_error)
+                    )
                 else:
-                    item.update(status="uploaded", session_id=session_id)
+                    item.update(status=SessionStatus.UPLOADED, session_id=session_id)
                 self._save()
                 break
 
