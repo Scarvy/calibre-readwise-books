@@ -76,7 +76,7 @@ class BooksClient(ApiClient):
 REFUSED = (401, 403, 429)
 
 
-def _refused(error: Exception | None) -> TypeGuard[ReadwiseError]:
+def _refused(error: Exception) -> TypeGuard[ReadwiseError]:
     return isinstance(error, ReadwiseError) and error.status in REFUSED
 
 
@@ -289,21 +289,16 @@ class SessionSync:
                 payload["publish_to_feed"] = item.get("publish_to_feed", False)
                 item.update(status=SessionStatus.SENDING, error="")
                 self._save()  # a crash or ambiguous response must not resend
-                with unlocked(self.lock):
-                    try:
+                try:
+                    with unlocked(self.lock):
                         session_id = client.create_session(payload)
-                    except Exception as error:  # noqa: BLE001 - any lost POST result is ambiguous
-                        upload_error = error
+                except Exception as error:  # noqa: BLE001 - any lost POST result is ambiguous
+                    if _refused(error):
+                        # Readwise turned the request away, so nothing was created.
+                        item.update(status=SessionStatus.PENDING, error=str(error))
+                        self.state["retry_at"] = self.clock() + _retry_delay(error)
                     else:
-                        upload_error = None
-                if _refused(upload_error):
-                    # Readwise turned the request away, so nothing was created.
-                    item.update(status=SessionStatus.PENDING, error=str(upload_error))
-                    self.state["retry_at"] = self.clock() + _retry_delay(upload_error)
-                elif upload_error is not None:
-                    item.update(
-                        status=SessionStatus.NEEDS_REVIEW, error=str(upload_error)
-                    )
+                        item.update(status=SessionStatus.NEEDS_REVIEW, error=str(error))
                 else:
                     item.update(status=SessionStatus.UPLOADED, session_id=session_id)
                 self._save()
