@@ -332,11 +332,25 @@ def _last_read(annots_file: Path) -> dict:
 
 
 def _read_jsonl(path: Path) -> list[dict]:
+    """Records in an append-only log, skipping a line cut short by a crash."""
     try:
         with path.open() as lines:
-            return [json.loads(line) for line in lines if line.strip()]
+            text = list(lines)
     except OSError:
         return []
+    records = []
+    for number, line in enumerate(text, 1):
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except ValueError:
+            print(f"Readwise Books: skipping unreadable line {number} of {path}")
+    if text and not text[-1].endswith("\n"):
+        # Start the next append on its own line, not glued to the broken one.
+        with path.open("a") as log:
+            log.write("\n")
+    return records
 
 
 def _run(args: list[str]) -> str:

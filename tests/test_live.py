@@ -165,6 +165,21 @@ def test_crash_before_state_is_written_does_not_requeue_session(env):
     assert len(restarted.finished_sessions()) == 1
 
 
+def test_line_cut_short_by_a_crash_is_skipped(env):
+    t = tracker(env)
+    read(env, 0)
+    t.poll()
+    with t.events_path.open("a") as log:
+        log.write('{"at": "2026-10-29T15:0')
+
+    restarted = tracker(env)
+    read(env, 30)
+    restarted.poll()
+
+    assert restarted.open_sessions()[0].saves == 2
+    assert tracker(env).open_sessions()[0].saves == 2
+
+
 def test_dwell_with_viewer_focused_stays_one_session(env):
     t = tracker(env, viewer=lambda: ViewerState(True, frozenset({1}), frozenset({1})))
     for second in (0, 20, 20 + 7 * 60, 20 + 7 * 60 + 20):
