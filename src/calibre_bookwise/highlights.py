@@ -301,7 +301,7 @@ class HighlightSync:
                     "Waiting for the highlight to finish saving.", Waiting.SETTLING
                 )
             if self.clock() < self.state.get("retry_at", 0):
-                return Explanation("Waiting for the next retry.")
+                return Explanation("Waiting for the next retry.", Waiting.RETRY)
             return Explanation("Queued for the next upload attempt.")
 
     def queue_saved(self, keys: list[str], books: Mapping[str, CalibreBook]):
