@@ -8,6 +8,7 @@ Only this module's uploaded highlights can have their notes updated; no deletes.
 import json
 import threading
 import time
+from collections import Counter
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
@@ -253,9 +254,7 @@ class HighlightSync:
         """How many highlights are in each status, and the distinct errors."""
         with self.lock:
             items = list(self.state["items"].values())
-        counts: dict[str, int] = {}
-        for item in items:
-            counts[item["status"]] = counts.get(item["status"], 0) + 1
+        counts = Counter(item["status"] for item in items)
         return counts, sorted({item["error"] for item in items if item.get("error")})
 
     def set_enabled(self, enabled: bool):
