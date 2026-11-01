@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .bookwise import skip_reason
+from .matching import LibraryBook
 from .sessions import (
     DEFAULT_DWELL_LIMIT,
     DEFAULT_IDLE_LIMIT,
@@ -54,7 +55,7 @@ class ViewerState:
     existing: frozenset[int] = field(default_factory=frozenset)
 
 
-BookLookup = Callable[[str], dict | None]  # annots key -> {book_id, title, path}
+BookLookup = Callable[[str], LibraryBook | None]  # annots key -> the book file
 ProgressOf = Callable[[str | None, str | None], float | None]  # (path, cfi) -> 0-1
 ViewerProbe = Callable[[], ViewerState | None]  # None = unknown (e.g. not macOS)
 
@@ -237,17 +238,17 @@ class Tracker:
         if not timestamp or timestamp == self.positions.get(key):
             return  # a highlight change, not a new position
         self.positions[key] = timestamp
-        book = self.book_lookup(key) or {}
+        book = self.book_lookup(key)
         self._append_event(
             {
                 "at": now.isoformat(),
                 "event": "position_saved",
                 "key": key,
-                "book_id": book.get("book_id"),
-                "title": book.get("title"),
+                "book_id": book.calibre_id if book else None,
+                "title": book.title if book else None,
                 "pos": position.get("pos"),
                 "viewer_timestamp": timestamp,
-                "path": book.get("path"),
+                "path": book.path if book else None,
             }
         )
 

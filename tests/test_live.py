@@ -5,11 +5,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from calibre_bookwise.live import Tracker, ViewerState
+from calibre_bookwise.matching import LibraryBook
 
 T0 = datetime(2026, 10, 29, 15, 0, tzinfo=UTC)
 KEY = "d1aafe7b9f"
 OTHER = "05c6d07563"
-BOOK = {"book_id": 11, "title": "Design for Developers", "path": "/library/dfd.epub"}
+BOOK = LibraryBook(11, "Design for Developers", (), path="/library/dfd.epub")
 
 
 class Viewer:
@@ -55,9 +56,7 @@ def tracker(env, viewer=None, **kwargs):
     return Tracker(
         data,
         annots,
-        book_lookup=lambda key: (
-            BOOK if key == KEY else {"book_id": 4, "title": "Other"}
-        ),
+        book_lookup=lambda key: BOOK if key == KEY else LibraryBook(4, "Other", ()),
         progress_of=lambda path, cfi: 0.25 if cfi == "start" else 0.3,
         viewer_probe=viewer,
         clock=clock,

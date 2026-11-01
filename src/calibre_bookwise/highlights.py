@@ -8,9 +8,11 @@ Only this module's uploaded highlights can have their notes updated; no deletes.
 import json
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Protocol
 
+from .matching import CalibreBook
 from .readwise_api import ApiClient, RateLimited, ReadwiseError
 from .storage import atomic_write_json
 
@@ -70,11 +72,11 @@ def read_annotations(path: Path) -> list[dict]:
     return value
 
 
-def highlight_payload(annotation: dict, book: dict) -> dict:
+def highlight_payload(annotation: dict, book: CalibreBook) -> dict:
     text = annotation.get("highlighted_text") or ""
     note = annotation.get("notes") or ""
-    title = book.get("title") or ""
-    author = ", ".join(book.get("authors") or ())
+    title = book.title or ""
+    author = ", ".join(book.authors)
     for name, value, limit in (
         ("text", text, 8191),
         ("note", note, 8191),
@@ -100,7 +102,7 @@ def highlight_payload(annotation: dict, book: dict) -> dict:
 
 
 def preview_highlights(
-    annots_dir: Path, books: dict[str, dict]
+    annots_dir: Path, books: Mapping[str, CalibreBook]
 ) -> tuple[list[dict], list[str]]:
     """Build create requests from saved annotations without changing sync state."""
     previews = []
@@ -112,7 +114,7 @@ def preview_highlights(
         try:
             annotations = read_annotations(path)
         except (OSError, ValueError) as error:
-            errors.append(f"{book.get('title') or path.name}: {error}")
+            errors.append(f"{book.title or path.name}: {error}")
             continue
         for annotation in annotations:
             if annotation.get("type") != "highlight" or annotation.get("removed"):
@@ -120,7 +122,7 @@ def preview_highlights(
             try:
                 payload = highlight_payload(annotation, book)
             except ValueError as error:
-                errors.append(f"{book.get('title') or path.name}: {error}")
+                errors.append(f"{book.title or path.name}: {error}")
                 continue
             method, url, body = highlight_request(payload)
             previews.append(
@@ -128,7 +130,7 @@ def preview_highlights(
                     "key": f"{path.stem}:{annotation['uuid']}"
                     if annotation.get("uuid")
                     else None,
-                    "book": book.get("title") or "",
+                    "book": book.title or "",
                     "timestamp": annotation.get("timestamp") or "",
                     "text": payload["text"],
                     "note": payload["note"],
@@ -219,15 +221,17 @@ class HighlightSync:
                 return "Waiting for the next retry."
             return "Queued for the next upload attempt."
 
-    def queue_saved(self, keys: list[str], books: dict[str, dict]):
+    def queue_saved(self, keys: list[str], books: Mapping[str, CalibreBook]):
         """Queue chosen older highlights, including while automatic upload is off."""
         self._queue_saved(keys, books, "local")
 
-    def retry_rejected(self, keys: list[str], books: dict[str, dict]):
+    def retry_rejected(self, keys: list[str], books: Mapping[str, CalibreBook]):
         """Explicitly retry rejected highlights after inspecting the error."""
         self._queue_saved(keys, books, "rejected")
 
-    def _queue_saved(self, keys: list[str], books: dict[str, dict], expected: str):
+    def _queue_saved(
+        self, keys: list[str], books: Mapping[str, CalibreBook], expected: str
+    ):
         with self.lock:
             previews, _errors = preview_highlights(self.annots_dir, books)
             available = {p["key"]: p for p in previews if p["key"] is not None}
@@ -251,7 +255,7 @@ class HighlightSync:
             self.state["seen"] = sorted(seen)
             self._save()
 
-    def poll(self, books: dict[str, dict], client: HighlightSender | None):
+    def poll(self, books: Mapping[str, CalibreBook], client: HighlightSender | None):
         with self.lock:
             now = self.clock()
             seen = set(self.state["seen"])

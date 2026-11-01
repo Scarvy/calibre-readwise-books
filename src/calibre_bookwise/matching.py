@@ -54,6 +54,13 @@ class CalibreBook:
         )
 
 
+@dataclass(frozen=True)
+class LibraryBook(CalibreBook):
+    """One file of a book in the active library; the viewer tracks files."""
+
+    path: str | None = None
+
+
 def calibre_book_from_db(db, book_id: int) -> CalibreBook:
     """The book with this id in a Calibre library (its db.new_api)."""
     return CalibreBook.from_identifiers(

@@ -4,6 +4,7 @@ import hashlib
 import json
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -194,7 +195,10 @@ class SessionSync:
             self._save()
 
     def poll(
-        self, records: list[dict], books: dict[str, dict], client: SessionSender | None
+        self,
+        records: list[dict],
+        books: Mapping[str, CalibreBook],
+        client: SessionSender | None,
     ):
         with self.lock:
             if self._register(records):
@@ -254,17 +258,10 @@ class SessionSync:
                 break
 
     def _book_id(
-        self, key: str, book: dict, item: dict, client: SessionSender
+        self, key: str, book: CalibreBook, item: dict, client: SessionSender
     ) -> int | None:
         if key in self.state["book_ids"]:
             return self.state["book_ids"][key]
-        calibre_book = CalibreBook(
-            book["book_id"],
-            book["title"],
-            tuple(book["authors"]),
-            book.get("isbn"),
-            book.get("asin"),
-        )
         self.lock.release()
         try:
             remote_books = client.list_books()
@@ -272,7 +269,7 @@ class SessionSync:
             self.lock.acquire()
         if not self._can_send(item):
             return None
-        [match] = plan_matches([calibre_book], remote_books)
+        [match] = plan_matches([book], remote_books)
         if match.bookwise_id is not None:
             book_id = match.bookwise_id
         elif match.create_item is not None:

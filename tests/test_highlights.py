@@ -9,6 +9,7 @@ from calibre_bookwise.highlights import (
     RateLimited,
     preview_highlights,
 )
+from calibre_bookwise.matching import CalibreBook
 from calibre_bookwise.readwise_api import ReadwiseError
 
 
@@ -18,7 +19,7 @@ def setup(tmp_path):
     annots.mkdir()
     now = [100.0]
     sync = HighlightSync(tmp_path / "data", annots, clock=lambda: now[0])
-    books = {"book": {"title": "A book", "authors": ["An Author"]}}
+    books = {"book": CalibreBook(1, "A book", ("An Author",))}
     return sync, annots / "book.json", now, books
 
 

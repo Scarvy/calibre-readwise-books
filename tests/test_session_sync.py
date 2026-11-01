@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from calibre_bookwise.matching import CalibreBook
 from calibre_bookwise.readwise_api import ReadwiseError
 from calibre_bookwise.session_sync import BooksClient, SessionSync
 
@@ -22,15 +23,7 @@ def record(start="2026-10-30T10:00:00+00:00", finished="2026-10-30T10:05:00+00:0
     }
 
 
-BOOKS = {
-    "book": {
-        "book_id": 7,
-        "title": "A Book",
-        "authors": ("An Author",),
-        "isbn": None,
-        "asin": None,
-    }
-}
+BOOKS = {"book": CalibreBook(7, "A Book", ("An Author",))}
 
 
 class FakeClient:

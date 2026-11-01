@@ -31,7 +31,7 @@ from calibre_plugins.readwise_books.live import (
     macos_viewer_state,
     session_from_record,
 )
-from calibre_plugins.readwise_books.matching import calibre_book_from_db
+from calibre_plugins.readwise_books.matching import LibraryBook, calibre_book_from_db
 from calibre_plugins.readwise_books.metadata_sync import MetadataSync, prefs
 from calibre_plugins.readwise_books.progress import book_progress
 from calibre_plugins.readwise_books.session_sync import (
@@ -87,7 +87,7 @@ class ReadwiseBooksAction(InterfaceAction):
         self.highlights = None
         self.session_sync = None
         self.tracker = None
-        self.books: dict[str, dict] = {}
+        self.books: dict[str, LibraryBook] = {}
         self.dialog = None
         self.poll_failed = False
         self.polling = False
@@ -213,17 +213,10 @@ class ReadwiseBooksAction(InterfaceAction):
                 path = db.format_abspath(book_id, fmt)
                 if path:
                     key = hashlib.sha256(path.encode()).hexdigest()
-                    books[key] = {
-                        "book_id": book_id,
-                        "title": book.title,
-                        "path": path,
-                        "authors": book.authors,
-                        "isbn": book.isbn,
-                        "asin": book.asin,
-                    }
+                    books[key] = LibraryBook(**vars(book), path=path)
         self.books = books
 
-    def lookup_book(self, key: str) -> dict | None:
+    def lookup_book(self, key: str) -> LibraryBook | None:
         if key not in self.books:
             self.index_library()  # a book added since the last index
         return self.books.get(key)
