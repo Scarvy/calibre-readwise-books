@@ -81,12 +81,23 @@ class ReadOnlyClient:
             except OSError as error:
                 raise ReadwiseError(f"Couldn't reach Readwise: {error}") from error
             if status == 429:
-                self.sleep(float(headers.get("Retry-After", 30)))
+                self.sleep(retry_after(headers, 30))
                 continue
             if status == 200:
                 return json.loads(body)
             raise ReadwiseError(_error_message(status, body))
         raise ReadwiseError("Readwise kept rate-limiting the request; try again later.")
+
+
+def retry_after(headers: dict, default: float) -> float:
+    """Seconds to wait from a 429's Retry-After; default if absent or a date."""
+    for name, value in headers.items():
+        if name.lower() == "retry-after":
+            try:
+                return max(1.0, float(value))
+            except (TypeError, ValueError):
+                break
+    return default
 
 
 def _error_message(status: int, body: bytes) -> str:

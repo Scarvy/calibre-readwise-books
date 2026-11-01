@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 from typing import Protocol
 
-from .readwise_api import Fetch, ReadwiseError, _urlopen
+from .readwise_api import Fetch, ReadwiseError, _urlopen, retry_after
 
 HIGHLIGHTS_URL = "https://readwise.io/api/v2/highlights/"
 SETTLE_SECONDS = 5
@@ -42,11 +42,7 @@ class HighlightClient:
         )
         status, headers, body = self.fetch(request)
         if status == 429:
-            try:
-                delay = max(1, float(headers.get("Retry-After", 60)))
-            except ValueError:
-                delay = 60
-            raise RateLimited(delay)
+            raise RateLimited(retry_after(headers, 60))
         if status != 200:
             message = _highlight_error(status, body)
             if status in (400, 422):

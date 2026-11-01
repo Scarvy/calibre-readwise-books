@@ -6,6 +6,7 @@ create the columns, which Calibre needs a restart to show.
 """
 
 import json
+import traceback
 from pathlib import Path
 
 from calibre.gui2 import error_dialog, info_dialog, question_dialog
@@ -43,6 +44,10 @@ class SyncWorker(QThread):
             self.finished_sync.emit(matches, column_updates(matches, sessions))
         except ReadwiseError as error:
             self.finished_sync.emit(None, str(error))
+        # Always report back, or the status bar says "syncing" forever.
+        except Exception as error:  # noqa: BLE001
+            traceback.print_exc()
+            self.finished_sync.emit(None, f"Unexpected error: {error}")
 
 
 class MetadataSync:

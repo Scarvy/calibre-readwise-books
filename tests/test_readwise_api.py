@@ -46,6 +46,26 @@ def test_waits_out_rate_limit_then_retries():
     assert waits == [7.0]
 
 
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({"retry-after": "7"}, 7.0),
+        ({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, 30.0),
+        ({}, 30.0),
+    ],
+)
+def test_rate_limit_wait_tolerates_any_retry_after(headers, expected):
+    waits = []
+    fake = FakeReadwise(
+        (429, headers, {}),
+        (200, {}, {"results": [], "next": None}),
+    )
+
+    ReadOnlyClient("t", fetch=fake, sleep=waits.append).list_books()
+
+    assert waits == [expected]
+
+
 def test_bad_token_gives_a_clear_error():
     fake = FakeReadwise((401, {}, {"error": {"code": "unauthenticated"}}))
 
