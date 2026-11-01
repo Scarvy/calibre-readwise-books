@@ -395,17 +395,21 @@ class SyncDialog(QDialog):
             self.highlights.refresh()
 
 
-class HighlightsPanel(QWidget):
-    COLUMNS = ("Book", "Highlight", "Note", "Saved", "Status")
+class SyncPanel(QWidget):
+    """A table of rows, a preview of the selected row's request, send buttons.
+
+    Subclasses set COLUMNS and NOUN, lay the widgets out, and say how a row
+    is identified (row_key) so a refresh keeps the selection.
+    """
+
+    COLUMNS: tuple[str, ...] = ()
+    STRETCH_COLUMN = 0
+    NOUN = ""  # what a row is, e.g. "highlight"
 
     def __init__(self, parent, action: ReadwiseBooksAction):
         super().__init__(parent)
         self.action = action
         self.rows: list[dict] = []
-        self.signature = None
-        layout = QVBoxLayout(self)
-        self.mode_label = QLabel(self)
-        layout.addWidget(self.mode_label)
         self.table = QTableWidget(0, len(self.COLUMNS), self)
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -413,24 +417,107 @@ class HighlightsPanel(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for column in (0, 2, 3, 4):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        for column in range(len(self.COLUMNS)):
+            header.setSectionResizeMode(
+                column,
+                QHeaderView.ResizeMode.Stretch
+                if column == self.STRETCH_COLUMN
+                else QHeaderView.ResizeMode.ResizeToContents,
+            )
         self.table.itemSelectionChanged.connect(self.show_payload)
-        layout.addWidget(self.table)
-        layout.addWidget(QLabel("Readwise request payload:", self))
         self.payload = QPlainTextEdit(self)
         self.payload.setReadOnly(True)
         self.payload.setMaximumHeight(180)
-        layout.addWidget(self.payload)
-        self.errors_label = QLabel(self)
-        layout.addWidget(self.errors_label)
-        self.send_button = QPushButton("Send selected local highlights", self)
+        self.send_button = QPushButton(self)
         self.send_button.clicked.connect(self.send_selected)
-        self.send_button.setEnabled(False)
-        self.send_all_button = QPushButton("Send all local highlights", self)
+        self.send_all_button = QPushButton(self)
         self.send_all_button.clicked.connect(self.send_all)
-        self.send_all_button.setEnabled(False)
+        self.update_send_buttons(0, 0)
+
+    def row_key(self, row: dict) -> str | None:
+        raise NotImplementedError
+
+    def show_payload(self):
+        raise NotImplementedError
+
+    def send_selected(self):
+        raise NotImplementedError
+
+    def send_all(self):
+        raise NotImplementedError
+
+    def selected_rows(self) -> list[dict]:
+        return [
+            self.rows[index.row()]
+            for index in self.table.selectionModel().selectedRows()
+            if 0 <= index.row() < len(self.rows)
+        ]
+
+    def fill_table(self, rows: list[dict], values: list[tuple], select_first: bool):
+        """Show rows, keeping the selection; values are each row's cells."""
+        selected_keys = {self.row_key(row) for row in self.selected_rows()} - {None}
+        self.rows = rows
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(rows))
+        for row, cells in enumerate(values):
+            for column, value in enumerate(cells):
+                self.table.setItem(row, column, QTableWidgetItem(str(value)))
+        self.table.clearSelection()
+        selected = [
+            number
+            for number, row in enumerate(rows)
+            if self.row_key(row) in selected_keys
+        ]
+        if not selected and select_first and rows:
+            selected = [0]
+        if selected:
+            self.table.setCurrentCell(selected[0], 0)
+            for number in selected:
+                self.table.setRangeSelected(
+                    QTableWidgetSelectionRange(
+                        number, 0, number, len(self.COLUMNS) - 1
+                    ),
+                    True,
+                )
+        self.table.blockSignals(False)
+        self.show_payload()
+
+    def payload_row(self) -> dict | None:
+        """The selected row to preview: the current one, else the first."""
+        numbers = {index.row() for index in self.table.selectionModel().selectedRows()}
+        row = self.table.currentRow()
+        if row not in numbers and numbers:
+            row = min(numbers)
+        if not numbers or not 0 <= row < len(self.rows):
+            return None
+        return self.rows[row]
+
+    def update_send_buttons(self, selected: int, everything: int):
+        noun = self.NOUN
+        self.send_button.setEnabled(bool(selected))
+        self.send_all_button.setEnabled(bool(everything))
+        self.send_button.setText(
+            f"Send {selected} selected local {_plural(selected, noun)}"
+            if selected
+            else f"Send selected local {noun}s"
+        )
+        self.send_all_button.setText(
+            f"Send all {everything} local {_plural(everything, noun)}"
+            if everything
+            else f"Send all local {noun}s"
+        )
+
+
+class HighlightsPanel(SyncPanel):
+    COLUMNS = ("Book", "Highlight", "Note", "Saved", "Status")
+    STRETCH_COLUMN = 1
+    NOUN = "highlight"
+
+    def __init__(self, parent, action: ReadwiseBooksAction):
+        super().__init__(parent, action)
+        self.signature = None
+        self.mode_label = QLabel(self)
+        self.errors_label = QLabel(self)
         self.retry_button = QPushButton("Retry rejected", self)
         self.retry_button.clicked.connect(self.retry_selected)
         self.retry_button.setEnabled(False)
@@ -439,7 +526,16 @@ class HighlightsPanel(QWidget):
         buttons.addWidget(self.send_all_button)
         buttons.addWidget(self.retry_button)
         buttons.addStretch()
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.mode_label)
+        layout.addWidget(self.table)
+        layout.addWidget(QLabel("Readwise request payload:", self))
+        layout.addWidget(self.payload)
+        layout.addWidget(self.errors_label)
         layout.addLayout(buttons)
+
+    def row_key(self, row: dict) -> str | None:
+        return row["key"]
 
     def refresh(self):
         sync = self.action.highlights
@@ -481,48 +577,18 @@ class HighlightsPanel(QWidget):
         self.errors_label.setText("; ".join(errors[:3]))
         if signature == self.signature:
             return
-        selected_keys = {
-            self.rows[index.row()]["key"]
-            for index in self.table.selectionModel().selectedRows()
-            if 0 <= index.row() < len(self.rows)
-        }
         self.signature = signature
-        self.rows = previews
-        self.table.blockSignals(True)
-        self.table.setRowCount(len(previews))
-        for row, preview in enumerate(previews):
-            values = (
-                preview["book"],
-                preview["text"][:180],
-                preview["note"][:100],
-                preview["timestamp"] or "unknown",
-                preview["display_status"],
+        values = [
+            (
+                p["book"],
+                p["text"][:180],
+                p["note"][:100],
+                p["timestamp"] or "unknown",
+                p["display_status"],
             )
-            for column, value in enumerate(values):
-                self.table.setItem(row, column, QTableWidgetItem(str(value)))
-        self.table.clearSelection()
-        selected_rows = [
-            row
-            for row, preview in enumerate(previews)
-            if preview["key"] is not None and preview["key"] in selected_keys
+            for p in previews
         ]
-        if not selected_rows and previews:
-            selected_rows = [0]
-        if selected_rows:
-            self.table.setCurrentCell(selected_rows[0], 0)
-            for row in selected_rows:
-                self.table.setRangeSelected(
-                    QTableWidgetSelectionRange(row, 0, row, len(self.COLUMNS) - 1), True
-                )
-        self.table.blockSignals(False)
-        self.show_payload()
-
-    def selected_rows(self) -> list[dict]:
-        return [
-            self.rows[index.row()]
-            for index in self.table.selectionModel().selectedRows()
-            if 0 <= index.row() < len(self.rows)
-        ]
+        self.fill_table(previews, values, select_first=True)
 
     def local_keys(self, rows: list[dict]) -> list[str]:
         return [p["key"] for p in rows if p["key"] and p["status"] == "local"]
@@ -534,29 +600,12 @@ class HighlightsPanel(QWidget):
             p["key"] for p in selected if p["key"] and p["status"] == "rejected"
         ]
         all_keys = self.local_keys(self.rows)
-        self.send_button.setEnabled(bool(selected_keys))
-        self.send_all_button.setEnabled(bool(all_keys))
+        self.update_send_buttons(len(selected_keys), len(all_keys))
         self.retry_button.setEnabled(bool(rejected_keys))
-        self.send_button.setText(
-            f"Send {len(selected_keys)} selected local highlight{'s' if len(selected_keys) != 1 else ''}"
-            if selected_keys
-            else "Send selected local highlights"
-        )
-        self.send_all_button.setText(
-            f"Send all {len(all_keys)} local highlight{'s' if len(all_keys) != 1 else ''}"
-            if all_keys
-            else "Send all local highlights"
-        )
-        row = self.table.currentRow()
-        selected_numbers = {
-            index.row() for index in self.table.selectionModel().selectedRows()
-        }
-        if row not in selected_numbers and selected_numbers:
-            row = min(selected_numbers)
-        if not selected or not 0 <= row < len(self.rows):
+        preview = self.payload_row()
+        if preview is None:
             self.payload.setPlainText("Select a highlight to see its payload.")
             return
-        preview = self.rows[row]
         content = (
             f"Status: {preview['status']}\n{preview['explanation']}\n\n"
             f"{preview['method']} {preview['url']}\n\n"
@@ -606,38 +655,14 @@ class HighlightsPanel(QWidget):
         self.action.poll()
 
 
-class SessionsPanel(QWidget):
+class SessionsPanel(SyncPanel):
     COLUMNS = ("Book", "Started", "Length", "Progress", "Pages", "Status")
+    NOUN = "session"
 
     def __init__(self, parent, action: ReadwiseBooksAction):
-        super().__init__(parent)
-        self.action = action
-        self.rows: list[dict] = []
-
-        self.table = QTableWidget(0, len(self.COLUMNS), self)
-        self.table.setHorizontalHeaderLabels(self.COLUMNS)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.table.verticalHeader().setVisible(False)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in range(1, len(self.COLUMNS)):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.itemSelectionChanged.connect(self.show_payload)
-
-        self.payload = QPlainTextEdit(self)
-        self.payload.setReadOnly(True)
-        self.payload.setMaximumHeight(170)
-
+        super().__init__(parent, action)
         end_button = QPushButton("End session now", self)
         end_button.clicked.connect(self.action.end_session)
-        self.send_button = QPushButton("Send selected local sessions", self)
-        self.send_button.clicked.connect(self.send_selected)
-        self.send_button.setEnabled(False)
-        self.send_all_button = QPushButton("Send all local sessions", self)
-        self.send_all_button.clicked.connect(self.send_all)
-        self.send_all_button.setEnabled(False)
         retry_button = QPushButton("Retry selected after review", self)
         retry_button.clicked.connect(self.retry_selected)
         folder_button = QPushButton("Open data folder", self)
@@ -663,6 +688,10 @@ class SessionsPanel(QWidget):
         layout.addWidget(self.payload)
         layout.addLayout(send_buttons)
         layout.addLayout(buttons)
+
+    def row_key(self, row: dict) -> str | None:
+        record = row.get("record")
+        return record_key(record) if record is not None else None
 
     def refresh(self):
         tracker = self.action.tracker
@@ -695,46 +724,23 @@ class SessionsPanel(QWidget):
             for record in reversed(tracker.finished_sessions())
         ]
         rows: list[dict[str, Any]] = open_rows + finished_rows
-        selected_keys = {
-            record_key(self.rows[index.row()]["record"])
-            for index in self.table.selectionModel().selectedRows()
-            if 0 <= index.row() < len(self.rows)
-            and self.rows[index.row()].get("record") is not None
-        }
-        self.rows = rows
-        self.table.blockSignals(True)
-        self.table.setRowCount(len(rows))
-        for row, entry in enumerate(rows):
+        values = []
+        for entry in rows:
             session = entry["session"]
             status = entry["status"]
             if status == "skipped":
                 status = f"skipped: {skip_reason(session)}"
-            values = (
-                session.title or session.book_key[:10],
-                session.start.astimezone().strftime("%a %d %b %H:%M"),
-                _duration(session.duration.total_seconds()),
-                _progress(session.start_progress, session.end_progress),
-                str(session.saves),
-                status,
-            )
-            for column, value in enumerate(values):
-                self.table.setItem(row, column, QTableWidgetItem(value))
-        self.table.clearSelection()
-        selected_rows = [
-            row
-            for row, entry in enumerate(rows)
-            if entry.get("record") is not None
-            and record_key(entry["record"]) in selected_keys
-        ]
-        if selected_rows:
-            self.table.setCurrentCell(selected_rows[0], 0)
-            for row in selected_rows:
-                self.table.setRangeSelected(
-                    QTableWidgetSelectionRange(row, 0, row, len(self.COLUMNS) - 1),
-                    True,
+            values.append(
+                (
+                    session.title or session.book_key[:10],
+                    session.start.astimezone().strftime("%a %d %b %H:%M"),
+                    _duration(session.duration.total_seconds()),
+                    _progress(session.start_progress, session.end_progress),
+                    session.saves,
+                    status,
                 )
-        self.table.blockSignals(False)
-        self.show_payload()
+            )
+        self.fill_table(rows, values, select_first=False)
 
     def local_records(self, rows: list[dict]) -> list[dict]:
         sync = self.action.session_sync
@@ -749,41 +755,17 @@ class SessionsPanel(QWidget):
             and skip_reason(entry["session"]) is None
         ]
 
-    def selected_entries(self) -> list[dict]:
-        return [
-            self.rows[index.row()]
-            for index in self.table.selectionModel().selectedRows()
-            if 0 <= index.row() < len(self.rows)
-        ]
-
     def show_payload(self):
-        selected = self.selected_entries()
-        local_selected = self.local_records(selected)
+        local_selected = self.local_records(self.selected_rows())
         local_all = self.local_records(self.rows)
-        self.send_button.setEnabled(bool(local_selected))
-        self.send_all_button.setEnabled(bool(local_all))
-        self.send_button.setText(
-            f"Send {len(local_selected)} selected local session{'s' if len(local_selected) != 1 else ''}"
-            if local_selected
-            else "Send selected local sessions"
-        )
-        self.send_all_button.setText(
-            f"Send all {len(local_all)} local session{'s' if len(local_all) != 1 else ''}"
-            if local_all
-            else "Send all local sessions"
-        )
-        row = self.table.currentRow()
-        selected_row_numbers = {
-            index.row() for index in self.table.selectionModel().selectedRows()
-        }
-        if row not in selected_row_numbers and selected_row_numbers:
-            row = min(selected_row_numbers)
-        if not selected or not 0 <= row < len(self.rows):
+        self.update_send_buttons(len(local_selected), len(local_all))
+        entry = self.payload_row()
+        if entry is None:
             self.payload.setPlainText("Select a session to see its payload.")
             return
-        session = self.rows[row]["session"]
+        session = entry["session"]
         sync = self.action.session_sync
-        error = self.rows[row].get("error")
+        error = entry.get("error")
         if reason := skip_reason(session):
             self.payload.setPlainText(f"Not sent: {reason}.")
             return
@@ -793,7 +775,7 @@ class SessionsPanel(QWidget):
         item["book_id"] = (
             bookwise_id or f"<Bookwise id for Calibre book {session.book_id}>"
         )
-        record = self.rows[row].get("record")
+        record = entry.get("record")
         item["publish_to_feed"] = (
             sync.publish_to_feed(record)
             if sync is not None and record is not None
@@ -803,7 +785,7 @@ class SessionsPanel(QWidget):
         self.payload.setPlainText(f"{error}\n\n{body}" if error else body)
 
     def send_selected(self):
-        self.send_records(self.local_records(self.selected_entries()))
+        self.send_records(self.local_records(self.selected_rows()))
 
     def send_all(self):
         records = self.local_records(self.rows)
@@ -856,6 +838,10 @@ class SessionsPanel(QWidget):
         except (OSError, ValueError) as error:
             error_dialog(self, "Retry unavailable", str(error), show=True)
         self.refresh()
+
+
+def _plural(count: int, noun: str) -> str:
+    return noun if count == 1 else f"{noun}s"
 
 
 def _duration(seconds: float) -> str:
