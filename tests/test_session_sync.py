@@ -2,7 +2,9 @@ import json
 
 import pytest
 
-from calibre_bookwise.readwise_api import ReadwiseError
+from calibre_bookwise.book_map import read_book_map, remember
+from calibre_bookwise.matching import CalibreBook
+from calibre_bookwise.readwise_api import RateLimited, ReadwiseError
 from calibre_bookwise.session_sync import BooksClient, SessionSync
 
 
@@ -22,15 +24,7 @@ def record(start="2026-10-30T10:00:00+00:00", finished="2026-10-30T10:05:00+00:0
     }
 
 
-BOOKS = {
-    "book": {
-        "book_id": 7,
-        "title": "A Book",
-        "authors": ("An Author",),
-        "isbn": None,
-        "asin": None,
-    }
-}
+BOOKS = {"book": CalibreBook(7, "A Book", ("An Author",))}
 
 
 class FakeClient:
@@ -83,7 +77,7 @@ def test_selected_local_session_sends_while_dry_run_remains_on(tmp_path):
     second = record("2026-10-30T11:00:00+00:00", "2026-10-30T11:05:00+00:00")
     second["end"] = "2026-10-30T11:04:00+00:00"
     sync = SessionSync(tmp_path, [first, second])
-    sync.queue_local(second)
+    sync.queue_locals([second])
     client = FakeClient()
     sync.poll([first, second], BOOKS, client)
     assert sync.state["mode"] == "dry_run"
@@ -97,7 +91,7 @@ def test_feed_toggle_applies_to_future_automatic_and_manual_uploads(tmp_path):
     local = record()
     sync = SessionSync(tmp_path, [local])
     sync.set_publish_to_feed(True)
-    sync.queue_local(local)
+    sync.queue_locals([local])
     assert sync.publish_to_feed(local) is True
     sync.set_mode("send", [local])
     future = record("2026-10-30T11:00:00+00:00", "2026-10-30T11:05:00+00:00")
@@ -247,3 +241,78 @@ def test_books_client_posts_off_feed_session_and_checks_result():
     assert json.loads(requests[0].data) == {
         "items": [{"book_id": 42, "publish_to_feed": False}]
     }
+
+
+def test_settings_and_book_ids_are_readable_without_touching_state(tmp_path):
+    sync = SessionSync(tmp_path, [])
+    assert (sync.sending, sync.feed_default, sync.book_id_for("book")) == (
+        False,
+        False,
+        None,
+    )
+    sync.set_mode("send", [])
+    sync.set_publish_to_feed(True)
+    sync.poll([record()], BOOKS, FakeClient())
+    assert (sync.sending, sync.feed_default, sync.book_id_for("book")) == (
+        True,
+        True,
+        42,
+    )
+
+
+def test_book_linked_by_metadata_sync_is_used_without_lookup(tmp_path):
+    remember(tmp_path, {7: 555})
+    sync = SessionSync(tmp_path, [])
+    sync.set_mode("send", [])
+
+    class NoLookups(FakeClient):
+        def list_books(self):
+            raise AssertionError("the saved link should be used")
+
+    client = NoLookups()
+    sync.poll([record()], BOOKS, client)
+    assert client.sessions[0]["book_id"] == 555
+    assert not client.created_books
+
+
+def test_created_book_is_remembered_for_metadata_sync(tmp_path):
+    sync = SessionSync(tmp_path, [])
+    sync.set_mode("send", [])
+    sync.poll([record()], BOOKS, FakeClient(remote_books=[]))
+    assert read_book_map(tmp_path) == {7: 42}
+
+
+@pytest.mark.parametrize(
+    "refusal", [RateLimited(30), ReadwiseError("Token rejected", 401)]
+)
+def test_refused_session_post_waits_and_retries_by_itself(tmp_path, refusal):
+    now = [1000.0]
+    sync = SessionSync(tmp_path, [], clock=lambda: now[0])
+    sync.set_mode("send", [])
+
+    class RefusingClient(FakeClient):
+        def create_session(self, item):
+            raise refusal
+
+    entry = record()
+    sync.poll([entry], BOOKS, RefusingClient())
+    assert sync.status(entry)["status"] == "pending"
+    client = FakeClient()
+    sync.poll([entry], BOOKS, client)
+    assert not client.sessions  # waits out the delay
+    now[0] += 61
+    sync.poll([entry], BOOKS, client)
+    assert sync.status(entry)["status"] == "uploaded"
+
+
+def test_refused_book_creation_is_retried_not_held_for_review(tmp_path):
+    class RefusingBookClient(FakeClient):
+        def create_book(self, item):
+            raise RateLimited(30)
+
+    sync = SessionSync(tmp_path, [])
+    sync.set_mode("send", [])
+    entry = record()
+    sync.poll([entry], BOOKS, RefusingBookClient(remote_books=[]))
+    assert sync.status(entry)["status"] == "pending"
+    assert sync.state["retry_at"] > 0

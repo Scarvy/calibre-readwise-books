@@ -11,11 +11,11 @@ from datetime import timedelta
 from pathlib import Path
 
 from calibre_bookwise.bookwise import (
-    BATCH_SIZE,
     local_timezone,
     session_item,
     skip_reason,
 )
+from calibre_bookwise.diagnostics import batches
 from calibre_bookwise.progress import book_progress
 from calibre_bookwise.sessions import (
     Session,
@@ -95,8 +95,8 @@ def print_payload(log_paths: list[Path], book_map: dict[int, int], **limits):
                 )
             else:
                 items.append(session_item(session, book_map[session.book_id], timezone))
-    for start in range(0, len(items), BATCH_SIZE):
-        print(json.dumps({"items": items[start : start + BATCH_SIZE]}, indent=2))
+    for body in batches(items):
+        print(json.dumps(body, indent=2))
 
 
 def parse_book_map(pairs: list[str]) -> dict[int, int]:

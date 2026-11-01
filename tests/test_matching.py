@@ -2,13 +2,13 @@ import sqlite3
 
 import pytest
 
+from calibre_bookwise.diagnostics import create_requests, read_calibre_books
 from calibre_bookwise.matching import (
     CalibreBook,
-    create_requests,
+    calibre_book_from_db,
     main_title,
     normalize_isbn,
     plan_matches,
-    read_calibre_books,
 )
 
 JAVASCRIPT = {
@@ -203,3 +203,30 @@ def test_live_copy_wins_over_a_deleted_duplicate():
     )
 
     assert match.bookwise_id == 4004
+
+
+class FakeCalibreDb:
+    def __init__(self, **fields):
+        self.fields = fields
+
+    def field_for(self, name, book_id):
+        return self.fields.get(name)
+
+
+@pytest.mark.parametrize(
+    ("identifiers", "asin"),
+    [
+        ({"mobi-asin": "B0MOBI", "amazon": "B0AMZN"}, "B0AMZN"),
+        ({"mobi-asin": "B0MOBI"}, "B0MOBI"),
+        ({"asin": "B0PLAIN"}, "B0PLAIN"),
+        ({}, None),
+    ],
+)
+def test_every_reader_of_calibre_books_finds_the_same_asin(identifiers, asin):
+    db = FakeCalibreDb(
+        title="T", authors=["A"], identifiers={"isbn": "123", **identifiers}
+    )
+
+    book = calibre_book_from_db(db, 5)
+
+    assert book == CalibreBook(5, "T", ("A",), "123", asin)

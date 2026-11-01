@@ -4,21 +4,31 @@ import hashlib
 import json
 import threading
 import time
-import urllib.request
+from collections.abc import Mapping
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeGuard
 
-from .bookwise import local_timezone, session_item, skip_reason
+from .book_map import definite_links, read_book_map, remember
+from .bookwise import SessionStatus, local_timezone, session_item, skip_reason
 from .live import session_from_record
+from .locking import unlocked
 from .matching import CalibreBook, plan_matches
 from .readwise_api import (
     BASE_URL,
+    ApiClient,
     Fetch,
+    RateLimited,
     ReadOnlyClient,
     ReadwiseError,
-    _error_message,
-    _urlopen,
+    urlopen,
 )
+from .storage import atomic_write_json
+
+
+class SessionMode(StrEnum):
+    DRY_RUN = "dry_run"  # finished sessions stay local unless sent by hand
+    SEND = "send"  # newly finished sessions are queued to send
 
 
 class SessionSender(Protocol):
@@ -31,12 +41,11 @@ class BookCreationUncertain(ReadwiseError):
     """A book POST may have succeeded even though its result was not received."""
 
 
-class BooksClient:
+class BooksClient(ApiClient):
     """Write client kept separate from the GET-only metadata client."""
 
-    def __init__(self, token: str, fetch: Fetch = _urlopen):
-        self.token = token.strip()
-        self.fetch = fetch
+    def __init__(self, token: str, fetch: Fetch = urlopen):
+        super().__init__(token, fetch)
         self.reader = ReadOnlyClient(token, fetch=fetch)
 
     def list_books(self) -> list[dict]:
@@ -49,21 +58,7 @@ class BooksClient:
         return self._create("sessions", item, "session_id")
 
     def _create(self, path: str, item: dict, id_field: str) -> int:
-        request = urllib.request.Request(
-            BASE_URL + path,
-            data=json.dumps({"items": [item]}).encode(),
-            method="POST",
-            headers={
-                "Authorization": f"Token {self.token}",
-                "Content-Type": "application/json",
-            },
-        )
-        try:
-            status, _headers, body = self.fetch(request)
-        except OSError as error:
-            raise ReadwiseError(f"Couldn't reach Readwise: {error}") from error
-        if status != 200:
-            raise ReadwiseError(_error_message(status, body))
+        body = self._request("POST", BASE_URL + path, {"items": [item]})
         try:
             [result] = json.loads(body)["results"]
             if result["status"] in ("created", "existing") and isinstance(
@@ -76,6 +71,19 @@ class BooksClient:
             raise ReadwiseError(f"Unexpected Readwise {path} response.") from error
 
 
+# Statuses where Readwise answered without acting on the request: a bad token
+# or a rate limit. Only these POST failures are certain to have created nothing.
+REFUSED = (401, 403, 429)
+
+
+def _refused(error: Exception) -> TypeGuard[ReadwiseError]:
+    return isinstance(error, ReadwiseError) and error.status in REFUSED
+
+
+def _retry_delay(error: Exception) -> float:
+    return error.delay if isinstance(error, RateLimited) else 60
+
+
 def record_key(record: dict) -> str:
     """Stable identity for one immutable entry in sessions.jsonl."""
     fields = (record["book_key"], record["start"], record["end"], record["finished_at"])
@@ -84,6 +92,7 @@ def record_key(record: dict) -> str:
 
 class SessionSync:
     def __init__(self, data_dir: Path, records: list[dict], clock=time.time):
+        self.data_dir = data_dir
         self.path = data_dir / "session_uploads.json"
         self.clock = clock
         self.lock = threading.RLock()
@@ -91,7 +100,7 @@ class SessionSync:
             self.state: dict[str, Any] = json.loads(self.path.read_text())
         else:
             self.state = {
-                "mode": "dry_run",
+                "mode": SessionMode.DRY_RUN,
                 "publish_to_feed": False,
                 "items": {},
                 "book_ids": {},
@@ -101,39 +110,63 @@ class SessionSync:
             self._save()
         if (
             not isinstance(self.state, dict)
-            or self.state.get("mode") not in ("dry_run", "send")
+            or self.state.get("mode") not in tuple(SessionMode)
             or not isinstance(self.state.get("items"), dict)
             or not isinstance(self.state.get("book_ids"), dict)
         ):
             raise ValueError("Invalid session upload state; restore from backup.")
-        for item in self.state["items"].values():
-            if item.get("status") == "sending":
-                item.update(
-                    status="needs review",
-                    error="Upload outcome unknown after interruption; check Readwise before retrying.",
-                )
-                self._save()
+        interrupted = [
+            item
+            for item in self.state["items"].values()
+            if item.get("status") == SessionStatus.SENDING
+        ]
+        for item in interrupted:
+            item.update(
+                status=SessionStatus.NEEDS_REVIEW,
+                error="Upload outcome unknown after interruption; check Readwise before retrying.",
+            )
+        if interrupted:
+            self._save()
 
     def _save(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(self.state, indent=2))
-        temporary.replace(self.path)
+        atomic_write_json(self.path, self.state, indent=2)
 
-    def _register(self, records: list[dict]):
+    def _register(self, records: list[dict]) -> bool:
+        """Add records not yet tracked; True if any were added."""
         added = False
+        queued = (
+            SessionStatus.PENDING
+            if self.state["mode"] == SessionMode.SEND
+            else SessionStatus.LOCAL
+        )
         for record in records:
             key = record_key(record)
             if key not in self.state["items"]:
                 added = True
+                skipped = record["status"] == SessionStatus.SKIPPED
                 self.state["items"][key] = {
-                    "status": "skipped"
-                    if record["status"] == "skipped"
-                    else ("pending" if self.state["mode"] == "send" else "local"),
+                    "status": SessionStatus.SKIPPED if skipped else queued,
                     "error": "",
                     "publish_to_feed": self.state.get("publish_to_feed", False),
                 }
         return added
+
+    @property
+    def sending(self) -> bool:
+        """Whether newly finished sessions are sent automatically."""
+        with self.lock:
+            return self.state["mode"] == SessionMode.SEND
+
+    @property
+    def feed_default(self) -> bool:
+        """Whether sessions queued from now on post to the Readwise feed."""
+        with self.lock:
+            return self.state.get("publish_to_feed", False)
+
+    def book_id_for(self, book_key: str) -> int | None:
+        """The Readwise book id this book file's sessions go to, once known."""
+        with self.lock:
+            return self.state["book_ids"].get(book_key)
 
     def set_publish_to_feed(self, enabled: bool):
         """Set the feed preference for sessions queued in the future."""
@@ -150,21 +183,21 @@ class SessionSync:
         """The feed setting a preview or pending upload will use."""
         with self.lock:
             item = self.state["items"].get(record_key(record), {})
-            if item.get("status") == "local":
+            if item.get("status") == SessionStatus.LOCAL:
                 return self.state.get("publish_to_feed", False)
             return item.get("publish_to_feed", False)
 
     def set_mode(self, mode: str, records: list[dict]):
-        if mode not in ("dry_run", "send"):
+        if mode not in tuple(SessionMode):
             raise ValueError("Invalid session mode")
         with self.lock:
             # Anything already recorded before the mode change stays local.
-            self.state["mode"] = "dry_run"
+            self.state["mode"] = SessionMode.DRY_RUN
             self._register(records)
-            if mode == "dry_run":
+            if mode == SessionMode.DRY_RUN:
                 for item in self.state["items"].values():
-                    if item["status"] == "pending":
-                        item["status"] = "local"
+                    if item["status"] == SessionStatus.PENDING:
+                        item["status"] = SessionStatus.LOCAL
             self.state["mode"] = mode
             self._save()
 
@@ -174,23 +207,20 @@ class SessionSync:
                 record_key(record), {"status": record["status"]}
             )
 
-    def queue_local(self, record: dict):
-        """Send one selected local session even while automatic uploads are off."""
-        self.queue_locals([record])
-
     def queue_locals(self, records: list[dict]):
         """Queue an explicit selection atomically, without changing the mode."""
         with self.lock:
             self._register(records)
             items = [self.state["items"][record_key(record)] for record in records]
             if not records or any(
-                item["status"] != "local" or skip_reason(session_from_record(record))
+                item["status"] != SessionStatus.LOCAL
+                or skip_reason(session_from_record(record))
                 for item, record in zip(items, records)
             ):
                 raise ValueError("Select eligible local sessions to send.")
             for item in items:
                 item.update(
-                    status="pending",
+                    status=SessionStatus.PENDING,
                     manual=True,
                     error="",
                     publish_to_feed=self.state.get("publish_to_feed", False),
@@ -198,21 +228,24 @@ class SessionSync:
             self._save()
 
     def _can_send(self, item: dict) -> bool:
-        return item["status"] == "pending" and (
-            self.state["mode"] == "send" or item.get("manual", False)
+        return item["status"] == SessionStatus.PENDING and (
+            self.state["mode"] == SessionMode.SEND or item.get("manual", False)
         )
 
     def retry_after_review(self, record: dict):
         with self.lock:
             item = self.state["items"][record_key(record)]
-            if item["status"] != "needs review":
+            if item["status"] != SessionStatus.NEEDS_REVIEW:
                 raise ValueError("Only sessions needing review can be retried.")
-            item.update(status="pending", manual=True, error="")
+            item.update(status=SessionStatus.PENDING, manual=True, error="")
             self.state["retry_at"] = 0
             self._save()
 
     def poll(
-        self, records: list[dict], books: dict[str, dict], client: SessionSender | None
+        self,
+        records: list[dict],
+        books: Mapping[str, CalibreBook],
+        client: SessionSender | None,
     ):
         with self.lock:
             if self._register(records):
@@ -229,82 +262,78 @@ class SessionSync:
                     continue  # wait for the originating library to be active
                 session = session_from_record(record)
                 if reason := skip_reason(session):
-                    item.update(status="skipped", error=reason)
+                    item.update(status=SessionStatus.SKIPPED, error=reason)
                     self._save()
                     break
                 try:
                     book_id = self._book_id(record["book_key"], book, item, client)
                 except BookCreationUncertain as error:
-                    item.update(status="needs review", error=str(error))
+                    item.update(status=SessionStatus.NEEDS_REVIEW, error=str(error))
                     self._save()
                     break
                 except ReadwiseError as error:
                     item["error"] = str(error)
-                    self.state["retry_at"] = self.clock() + 60
+                    self.state["retry_at"] = self.clock() + _retry_delay(error)
                     self._save()
                     break
                 if not self._can_send(item):
                     break  # mode changed while the book lookup was in flight
                 if book_id is None:
                     item.update(
-                        status="needs review", error="Cannot match or create this book."
+                        status=SessionStatus.NEEDS_REVIEW,
+                        error="Cannot match or create this book.",
                     )
                     self._save()
                     break
                 payload = session_item(session, book_id, local_timezone())
                 payload["publish_to_feed"] = item.get("publish_to_feed", False)
-                item.update(status="sending", error="")
+                item.update(status=SessionStatus.SENDING, error="")
                 self._save()  # a crash or ambiguous response must not resend
-                self.lock.release()
                 try:
-                    session_id = client.create_session(payload)
+                    with unlocked(self.lock):
+                        session_id = client.create_session(payload)
                 except Exception as error:  # noqa: BLE001 - any lost POST result is ambiguous
-                    upload_error = error
+                    if _refused(error):
+                        # Readwise turned the request away, so nothing was created.
+                        item.update(status=SessionStatus.PENDING, error=str(error))
+                        self.state["retry_at"] = self.clock() + _retry_delay(error)
+                    else:
+                        item.update(status=SessionStatus.NEEDS_REVIEW, error=str(error))
                 else:
-                    upload_error = None
-                finally:
-                    self.lock.acquire()
-                if upload_error is not None:
-                    item.update(status="needs review", error=str(upload_error))
-                else:
-                    item.update(status="uploaded", session_id=session_id)
+                    item.update(status=SessionStatus.UPLOADED, session_id=session_id)
                 self._save()
                 break
 
     def _book_id(
-        self, key: str, book: dict, item: dict, client: SessionSender
+        self, key: str, book: CalibreBook, item: dict, client: SessionSender
     ) -> int | None:
         if key in self.state["book_ids"]:
             return self.state["book_ids"][key]
-        calibre_book = CalibreBook(
-            book["book_id"],
-            book["title"],
-            tuple(book["authors"]),
-            book.get("isbn"),
-            book.get("asin"),
-        )
-        self.lock.release()
-        try:
-            remote_books = client.list_books()
-        finally:
-            self.lock.acquire()
-        if not self._can_send(item):
-            return None
-        [match] = plan_matches([calibre_book], remote_books)
-        if match.bookwise_id is not None:
-            book_id = match.bookwise_id
-        elif match.create_item is not None:
-            self.lock.release()
-            try:
-                book_id = client.create_book(match.create_item)
-            except ReadwiseError as error:
-                raise BookCreationUncertain(
-                    f"Book creation outcome unknown: {error}. Check Readwise before retrying."
-                ) from error
-            finally:
-                self.lock.acquire()
+        saved = read_book_map(self.data_dir)  # links metadata sync has made
+        if book.calibre_id in saved:
+            book_id = saved[book.calibre_id]
         else:
-            return None
+            with unlocked(self.lock):
+                remote_books = client.list_books()
+            if not self._can_send(item):
+                return None
+            [match] = plan_matches([book], remote_books)
+            if match.bookwise_id is not None:
+                book_id = match.bookwise_id
+                remember(self.data_dir, definite_links([match]))
+            elif match.create_item is not None:
+                try:
+                    with unlocked(self.lock):
+                        book_id = client.create_book(match.create_item)
+                except ReadwiseError as error:
+                    if _refused(error):
+                        raise  # nothing was created: an ordinary retry later
+                    raise BookCreationUncertain(
+                        f"Book creation outcome unknown: {error}. Check Readwise before retrying."
+                    ) from error
+                remember(self.data_dir, {book.calibre_id: book_id})
+            else:
+                return None
         self.state["book_ids"][key] = book_id
         self._save()
         return book_id
