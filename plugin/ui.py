@@ -96,6 +96,7 @@ class ReadwiseBooksAction(InterfaceAction):
         self.unindexed: set[str] = set()  # annots keys not in this library
         self.dialog = None
         self.poll_failed = False
+        self.poll_failure_shown = False
         self.polling = False
         # get_icons is provided by Calibre to plugin code at runtime.
         self.qaction.setIcon(get_icons(ICON, "Readwise Books"))  # noqa: F821
@@ -242,6 +243,7 @@ class ReadwiseBooksAction(InterfaceAction):
         """
         if self.tracker is None:
             return
+        self.report_poll_failure()
         self.highlight_token = prefs.get("token", "")
         if not self.polling:
             self.index_new_books()  # before the tracker looks the books up
@@ -249,6 +251,18 @@ class ReadwiseBooksAction(InterfaceAction):
             threading.Thread(target=self._poll_in_background, daemon=True).start()
         if self.dialog is not None and self.dialog.isVisible():
             self.dialog.refresh_current()
+
+    def report_poll_failure(self):
+        """Tell the user once when tracking starts failing, not on every poll."""
+        if not self.poll_failed:
+            self.poll_failure_shown = False
+        elif not self.poll_failure_shown:
+            self.poll_failure_shown = True
+            self.gui.status_bar.show_message(
+                "Readwise Books: reading tracking hit an error and will keep "
+                "retrying. Details are in Calibre's debug log.",
+                15000,
+            )
 
     def _poll_in_background(self):
         try:
