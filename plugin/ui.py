@@ -283,8 +283,7 @@ class ReadwiseBooksAction(InterfaceAction):
                 "Could not save the session mode.",
                 show=True,
             )
-        if self.dialog is not None and self.dialog.isVisible():
-            self.dialog.sessions.refresh()
+        self.refresh_sessions_window()
 
     def toggle_feed_posting(self, enabled):
         if self.session_sync is None:
@@ -302,8 +301,7 @@ class ReadwiseBooksAction(InterfaceAction):
         self.feed_action.setChecked(
             self.session_sync.state.get("publish_to_feed", False)
         )
-        if self.dialog is not None and self.dialog.isVisible():
-            self.dialog.sessions.refresh()
+        self.refresh_sessions_window()
 
     def toggle_highlights(self, enabled):
         if self.highlights is None:
@@ -341,11 +339,14 @@ class ReadwiseBooksAction(InterfaceAction):
             message += "\n\n" + "\n".join(errors)
         info_dialog(self.gui, "Highlight sync status", message, show=True)
 
+    def refresh_sessions_window(self):
+        if self.dialog is not None and self.dialog.isVisible():
+            self.dialog.sessions.refresh()
+
     def end_session(self):
         if self.tracker is not None:
             self.tracker.end_session()
-        if self.dialog is not None and self.dialog.isVisible():
-            self.dialog.sessions.refresh()
+        self.refresh_sessions_window()
 
     def show_sessions(self):
         if self.tracker is None:
