@@ -27,6 +27,8 @@ from pathlib import Path
 CREATE_STATUS = "currently_reading"  # books are created when a session is read
 BATCH_SIZE = 10  # books_create_books takes at most 10 items
 UNKNOWN_AUTHORS = {"", "unknown"}
+# Calibre identifier types that hold an Amazon ASIN, most trusted first.
+ASIN_TYPES = ("amazon", "mobi-asin", "asin")
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,30 @@ class CalibreBook:
     authors: tuple[str, ...]
     isbn: str | None = None
     asin: str | None = None
+
+    @classmethod
+    def from_identifiers(
+        cls,
+        calibre_id: int,
+        title: str,
+        authors: Iterable[str],
+        identifiers: Mapping[str, str],
+    ) -> "CalibreBook":
+        """A book from Calibre fields, with identifiers as Calibre stores them."""
+        asin = next((identifiers[t] for t in ASIN_TYPES if identifiers.get(t)), None)
+        return cls(
+            calibre_id, title, tuple(authors), identifiers.get("isbn") or None, asin
+        )
+
+
+def calibre_book_from_db(db, book_id: int) -> CalibreBook:
+    """The book with this id in a Calibre library (its db.new_api)."""
+    return CalibreBook.from_identifiers(
+        book_id,
+        db.field_for("title", book_id),
+        db.field_for("authors", book_id) or (),
+        db.field_for("identifiers", book_id) or {},
+    )
 
 
 @dataclass(frozen=True)
@@ -197,22 +223,23 @@ def read_calibre_books(
             """
             SELECT b.id, b.title,
                 (SELECT group_concat(a.name, '\x1f') FROM books_authors_link l
-                   JOIN authors a ON a.id = l.author WHERE l.book = b.id),
-                (SELECT val FROM identifiers WHERE book = b.id AND type = 'isbn'),
-                (SELECT val FROM identifiers WHERE book = b.id
-                   AND type IN ('amazon', 'mobi-asin', 'asin') LIMIT 1)
+                   JOIN authors a ON a.id = l.author WHERE l.book = b.id)
             FROM books b ORDER BY b.id
             """
         ).fetchall()
+        identifiers: dict[int, dict[str, str]] = {}
+        for book_id, kind, value in db.execute(
+            "SELECT book, type, val FROM identifiers"
+        ):
+            identifiers.setdefault(book_id, {})[kind] = value
     wanted = set(calibre_ids) if calibre_ids is not None else None
     return [
-        CalibreBook(
-            calibre_id=book_id,
-            title=title,
-            authors=tuple((authors or "").split("\x1f")) if authors else (),
-            isbn=isbn or None,
-            asin=asin or None,
+        CalibreBook.from_identifiers(
+            book_id,
+            title,
+            authors.split("\x1f") if authors else (),
+            identifiers.get(book_id, {}),
         )
-        for book_id, title, authors, isbn, asin in rows
+        for book_id, title, authors in rows
         if wanted is None or book_id in wanted
     ]

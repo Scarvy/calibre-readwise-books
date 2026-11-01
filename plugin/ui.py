@@ -31,6 +31,7 @@ from calibre_plugins.readwise_books.live import (
     macos_viewer_state,
     session_from_record,
 )
+from calibre_plugins.readwise_books.matching import calibre_book_from_db
 from calibre_plugins.readwise_books.metadata_sync import MetadataSync, prefs
 from calibre_plugins.readwise_books.progress import book_progress
 from calibre_plugins.readwise_books.session_sync import (
@@ -207,25 +208,18 @@ class ReadwiseBooksAction(InterfaceAction):
         db = self.gui.current_db.new_api
         books = {}
         for book_id in db.all_book_ids():
-            title = db.field_for("title", book_id)
+            book = calibre_book_from_db(db, book_id)
             for fmt in db.formats(book_id):
                 path = db.format_abspath(book_id, fmt)
                 if path:
                     key = hashlib.sha256(path.encode()).hexdigest()
                     books[key] = {
                         "book_id": book_id,
-                        "title": title,
+                        "title": book.title,
                         "path": path,
-                        "authors": db.field_for("authors", book_id) or (),
-                        "isbn": (db.field_for("identifiers", book_id) or {}).get(
-                            "isbn"
-                        ),
-                        "asin": (db.field_for("identifiers", book_id) or {}).get(
-                            "amazon"
-                        )
-                        or (db.field_for("identifiers", book_id) or {}).get(
-                            "mobi-asin"
-                        ),
+                        "authors": book.authors,
+                        "isbn": book.isbn,
+                        "asin": book.asin,
                     }
         self.books = books
 

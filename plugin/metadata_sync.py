@@ -11,7 +11,11 @@ from pathlib import Path
 
 from calibre.gui2 import error_dialog, info_dialog, question_dialog
 from calibre.utils.config import JSONConfig
-from calibre_plugins.readwise_books.matching import CalibreBook, plan_matches
+from calibre_plugins.readwise_books.matching import (
+    CalibreBook,
+    calibre_book_from_db,
+    plan_matches,
+)
 from calibre_plugins.readwise_books.metadata import (
     COLUMNS,
     NOT_IN_READWISE,
@@ -79,7 +83,7 @@ class MetadataSync:
         if not self.ensure_columns():
             return
         db = self.gui.current_db.new_api
-        books = [_calibre_book(db, book_id) for book_id in db.all_book_ids()]
+        books = [calibre_book_from_db(db, book_id) for book_id in db.all_book_ids()]
         self.worker = SyncWorker(self.gui, prefs["token"], books, self._saved())
         self.worker.finished_sync.connect(self.apply)
         self.gui.status_bar.show_message("Readwise Books: syncing metadata…", 0)
@@ -219,14 +223,3 @@ class MetadataSync:
             if match.matched_by in ("isbn", "asin"):
                 saved[match.book.calibre_id] = match.bookwise_id
         atomic_write_json(self.book_map_path, saved, indent=2, sort_keys=True)
-
-
-def _calibre_book(db, book_id: int) -> CalibreBook:
-    identifiers = db.field_for("identifiers", book_id) or {}
-    return CalibreBook(
-        calibre_id=book_id,
-        title=db.field_for("title", book_id),
-        authors=tuple(db.field_for("authors", book_id) or ()),
-        isbn=identifiers.get("isbn"),
-        asin=identifiers.get("amazon") or identifiers.get("mobi-asin"),
-    )
