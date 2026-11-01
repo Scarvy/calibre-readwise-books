@@ -134,18 +134,18 @@ class SessionSync:
     def _register(self, records: list[dict]) -> bool:
         """Add records not yet tracked; True if any were added."""
         added = False
+        queued = (
+            SessionStatus.PENDING
+            if self.state["mode"] == SessionMode.SEND
+            else SessionStatus.LOCAL
+        )
         for record in records:
             key = record_key(record)
             if key not in self.state["items"]:
                 added = True
+                skipped = record["status"] == SessionStatus.SKIPPED
                 self.state["items"][key] = {
-                    "status": SessionStatus.SKIPPED
-                    if record["status"] == SessionStatus.SKIPPED
-                    else (
-                        SessionStatus.PENDING
-                        if self.state["mode"] == SessionMode.SEND
-                        else SessionStatus.LOCAL
-                    ),
+                    "status": SessionStatus.SKIPPED if skipped else queued,
                     "error": "",
                     "publish_to_feed": self.state.get("publish_to_feed", False),
                 }
