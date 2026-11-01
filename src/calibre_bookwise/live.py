@@ -32,6 +32,7 @@ from .sessions import (
     focus_from_events,
     saves_from_events,
 )
+from .storage import atomic_write_json
 
 # Viewer opened from the Calibre app, and from the command line (macOS).
 VIEWER_EXECUTABLE_SUFFIXES = (
@@ -273,9 +274,7 @@ class Tracker:
             return {}
 
     def _write_state(self):
-        temporary = self.state_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps({"finished_until": self.finished_until}))
-        temporary.replace(self.state_path)
+        atomic_write_json(self.state_path, {"finished_until": self.finished_until})
 
 
 def _remembered(progress_of: ProgressOf) -> ProgressOf:

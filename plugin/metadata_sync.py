@@ -19,6 +19,7 @@ from calibre_plugins.readwise_books.metadata import (
 )
 from calibre_plugins.readwise_books.progress import viewer_position_at_progress
 from calibre_plugins.readwise_books.readwise_api import ReadOnlyClient, ReadwiseError
+from calibre_plugins.readwise_books.storage import atomic_write_json
 from qt.core import QInputDialog, QLineEdit, QThread, pyqtSignal
 
 prefs = JSONConfig("plugins/readwise_books")  # holds the Readwise API token
@@ -217,8 +218,7 @@ class MetadataSync:
         for match in matches:
             if match.matched_by in ("isbn", "asin"):
                 saved[match.book.calibre_id] = match.bookwise_id
-        self.book_map_path.parent.mkdir(parents=True, exist_ok=True)
-        self.book_map_path.write_text(json.dumps(saved, indent=2, sort_keys=True))
+        atomic_write_json(self.book_map_path, saved, indent=2, sort_keys=True)
 
 
 def _calibre_book(db, book_id: int) -> CalibreBook:

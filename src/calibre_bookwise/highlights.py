@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .readwise_api import ApiClient, RateLimited, ReadwiseError
+from .storage import atomic_write_json
 
 HIGHLIGHTS_URL = "https://readwise.io/api/v2/highlights/"
 SETTLE_SECONDS = 5
@@ -169,10 +170,7 @@ class HighlightSync:
             raise ValueError("Invalid highlight sync state; restore from backup.")
 
     def _save(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(self.state, indent=2))
-        temporary.replace(self.path)
+        atomic_write_json(self.path, self.state, indent=2)
 
     def set_enabled(self, enabled: bool):
         with self.lock:

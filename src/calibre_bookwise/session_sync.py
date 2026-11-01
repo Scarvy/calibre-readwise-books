@@ -18,6 +18,7 @@ from .readwise_api import (
     ReadwiseError,
     urlopen,
 )
+from .storage import atomic_write_json
 
 
 class SessionSender(Protocol):
@@ -99,10 +100,7 @@ class SessionSync:
                 self._save()
 
     def _save(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(self.state, indent=2))
-        temporary.replace(self.path)
+        atomic_write_json(self.path, self.state, indent=2)
 
     def _register(self, records: list[dict]):
         added = False
