@@ -101,13 +101,18 @@ class SessionSync:
             or not isinstance(self.state.get("book_ids"), dict)
         ):
             raise ValueError("Invalid session upload state; restore from backup.")
-        for item in self.state["items"].values():
-            if item.get("status") == SessionStatus.SENDING:
-                item.update(
-                    status=SessionStatus.NEEDS_REVIEW,
-                    error="Upload outcome unknown after interruption; check Readwise before retrying.",
-                )
-                self._save()
+        interrupted = [
+            item
+            for item in self.state["items"].values()
+            if item.get("status") == SessionStatus.SENDING
+        ]
+        for item in interrupted:
+            item.update(
+                status=SessionStatus.NEEDS_REVIEW,
+                error="Upload outcome unknown after interruption; check Readwise before retrying.",
+            )
+        if interrupted:
+            self._save()
 
     def _save(self):
         atomic_write_json(self.path, self.state, indent=2)
