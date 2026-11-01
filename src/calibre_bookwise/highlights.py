@@ -8,11 +8,10 @@ Only this module's uploaded highlights can have their notes updated; no deletes.
 import json
 import threading
 import time
-import urllib.request
 from pathlib import Path
 from typing import Protocol
 
-from .readwise_api import Fetch, ReadwiseError, _urlopen, retry_after
+from .readwise_api import ApiClient, RateLimited, ReadwiseError
 
 HIGHLIGHTS_URL = "https://readwise.io/api/v2/highlights/"
 SETTLE_SECONDS = 5
@@ -22,32 +21,19 @@ class HighlightSender(Protocol):
     def send(self, payload: dict, remote_id: int | None = None) -> int: ...
 
 
-class HighlightClient:
+class HighlightClient(ApiClient):
     """Separate from the deliberately GET-only metadata client. No DELETE method."""
 
-    def __init__(self, token: str, fetch: Fetch = _urlopen):
-        self.token = token.strip()
-        self.fetch = fetch
+    _retry_default = 60.0
 
     def send(self, payload: dict, remote_id: int | None = None) -> int:
         method, url, data = highlight_request(payload, remote_id)
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(data).encode(),
-            method=method,
-            headers={
-                "Authorization": f"Token {self.token}",
-                "Content-Type": "application/json",
-            },
-        )
-        status, headers, body = self.fetch(request)
-        if status == 429:
-            raise RateLimited(retry_after(headers, 60))
-        if status != 200:
-            message = _highlight_error(status, body)
-            if status in (400, 422):
-                raise HighlightRejected(message)
-            raise ReadwiseError(message)
+        try:
+            body = self._request(method, url, data)
+        except ReadwiseError as error:
+            if error.status in (400, 422):
+                raise HighlightRejected(str(error), error.status) from error
+            raise
         if remote_id is not None:
             return remote_id
         books = json.loads(body)
@@ -60,29 +46,8 @@ class HighlightClient:
         return ids[0]
 
 
-class RateLimited(ReadwiseError):
-    def __init__(self, delay: float):
-        super().__init__("Readwise rate limit; upload will retry later.")
-        self.delay = delay
-
-
 class HighlightRejected(ReadwiseError):
     """Readwise rejected this payload; repeating it unchanged will not help."""
-
-
-def _highlight_error(status: int, body: bytes) -> str:
-    try:
-        details = json.loads(body)
-    except (ValueError, UnicodeDecodeError):
-        details = body.decode("utf-8", "replace").strip()
-    if isinstance(details, dict):
-        details = details.get("detail") or details.get("error") or details
-    if isinstance(details, (dict, list)):
-        details = json.dumps(details, ensure_ascii=False)
-    detail = str(details).strip()[:500]
-    return f"Readwise highlight upload failed (HTTP {status})" + (
-        f": {detail}" if detail else "."
-    )
 
 
 def highlight_request(

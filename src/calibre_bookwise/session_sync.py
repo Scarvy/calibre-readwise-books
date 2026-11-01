@@ -4,7 +4,6 @@ import hashlib
 import json
 import threading
 import time
-import urllib.request
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -13,11 +12,11 @@ from .live import session_from_record
 from .matching import CalibreBook, plan_matches
 from .readwise_api import (
     BASE_URL,
+    ApiClient,
     Fetch,
     ReadOnlyClient,
     ReadwiseError,
-    _error_message,
-    _urlopen,
+    urlopen,
 )
 
 
@@ -31,12 +30,11 @@ class BookCreationUncertain(ReadwiseError):
     """A book POST may have succeeded even though its result was not received."""
 
 
-class BooksClient:
+class BooksClient(ApiClient):
     """Write client kept separate from the GET-only metadata client."""
 
-    def __init__(self, token: str, fetch: Fetch = _urlopen):
-        self.token = token.strip()
-        self.fetch = fetch
+    def __init__(self, token: str, fetch: Fetch = urlopen):
+        super().__init__(token, fetch)
         self.reader = ReadOnlyClient(token, fetch=fetch)
 
     def list_books(self) -> list[dict]:
@@ -49,21 +47,7 @@ class BooksClient:
         return self._create("sessions", item, "session_id")
 
     def _create(self, path: str, item: dict, id_field: str) -> int:
-        request = urllib.request.Request(
-            BASE_URL + path,
-            data=json.dumps({"items": [item]}).encode(),
-            method="POST",
-            headers={
-                "Authorization": f"Token {self.token}",
-                "Content-Type": "application/json",
-            },
-        )
-        try:
-            status, _headers, body = self.fetch(request)
-        except OSError as error:
-            raise ReadwiseError(f"Couldn't reach Readwise: {error}") from error
-        if status != 200:
-            raise ReadwiseError(_error_message(status, body))
+        body = self._request("POST", BASE_URL + path, {"items": [item]})
         try:
             [result] = json.loads(body)["results"]
             if result["status"] in ("created", "existing") and isinstance(

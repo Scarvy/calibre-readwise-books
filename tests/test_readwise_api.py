@@ -2,7 +2,14 @@ import json
 
 import pytest
 
-from calibre_bookwise.readwise_api import BASE_URL, ReadOnlyClient, ReadwiseError
+from calibre_bookwise.highlights import HighlightClient
+from calibre_bookwise.readwise_api import (
+    BASE_URL,
+    RateLimited,
+    ReadOnlyClient,
+    ReadwiseError,
+)
+from calibre_bookwise.session_sync import BooksClient
 
 
 class FakeReadwise:
@@ -84,3 +91,23 @@ def test_client_has_no_way_to_write():
     public = {name for name in dir(ReadOnlyClient) if not name.startswith("_")}
 
     assert public == {"list_books", "list_sessions"}
+
+
+def test_every_client_reports_network_failures_the_same_way():
+    def offline(request):
+        raise OSError("no route to host")
+
+    for send in (
+        lambda: ReadOnlyClient("t", fetch=offline).list_books(),
+        lambda: BooksClient("t", fetch=offline).create_session({}),
+        lambda: HighlightClient("t", fetch=offline).send({"text": "Passage"}),
+    ):
+        with pytest.raises(ReadwiseError, match="Couldn't reach Readwise"):
+            send()
+
+
+def test_write_client_rate_limit_carries_the_delay():
+    client = BooksClient("t", fetch=lambda r: (429, {"Retry-After": "12"}, b""))
+    with pytest.raises(RateLimited) as limited:
+        client.create_session({})
+    assert limited.value.delay == 12.0
