@@ -848,25 +848,28 @@ class SessionsPanel(SyncPanel):
         self.action.poll()
 
     def retry_selected(self):
-        row = self.table.currentRow()
         sync = self.action.session_sync
-        if sync is None or not 0 <= row < len(self.rows):
+        if sync is None:
             return
-        record = self.rows[row].get("record")
-        if (
-            record is None
-            or sync.status(record)["status"] != SessionStatus.NEEDS_REVIEW
-        ):
+        records = [
+            record
+            for entry in self.selected_rows()
+            if (record := entry.get("record")) is not None
+            and sync.status(record)["status"] == SessionStatus.NEEDS_REVIEW
+        ]
+        if not records:
             return
+        sessions = "this session is" if len(records) == 1 else "these sessions are"
         if not question_dialog(
             self,
-            "Retry session upload?",
+            f"Retry {len(records)} session {_plural(len(records), 'upload')}?",
             "Check Readwise Books first. Its API does not detect duplicate sessions. "
-            "Retry only if this session is absent there.",
+            f"Retry only if {sessions} absent there.",
         ):
             return
         try:
-            sync.retry_after_review(record)
+            for record in records:
+                sync.retry_after_review(record)
         except (OSError, ValueError) as error:
             error_dialog(self, "Retry unavailable", str(error), show=True)
         self.refresh()
