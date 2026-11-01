@@ -9,6 +9,7 @@ import hashlib
 import json
 import threading
 import traceback
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -263,64 +264,71 @@ class ReadwiseBooksAction(InterfaceAction):
             self.polling = False
 
     def toggle_session_sending(self, enabled):
-        if self.session_sync is None or self.tracker is None:
-            self.session_send_action.setChecked(False)
-            return
-        if enabled and not prefs.get("token") and not self.metadata_sync.set_token():
-            self.session_send_action.setChecked(False)
-            return
-        try:
-            self.session_sync.set_mode(
-                "send" if enabled else "dry_run", self.tracker.finished_sessions()
-            )
-        except (OSError, ValueError):
-            self.session_send_action.setChecked(
-                self.session_sync.state["mode"] == "send"
-            )
-            error_dialog(
-                self.gui,
-                "Session mode unavailable",
-                "Could not save the session mode.",
-                show=True,
-            )
-        self.refresh_sessions_window()
+        sync, tracker = self.session_sync, self.tracker
+        self._apply_toggle(
+            self.session_send_action,
+            available=sync is not None and tracker is not None,
+            needs_token=enabled,
+            apply=lambda: sync.set_mode(
+                "send" if enabled else "dry_run", tracker.finished_sessions()
+            ),
+            saved=lambda: sync.state["mode"] == "send",
+            failure_title="Session mode unavailable",
+            failure_message="Could not save the session mode.",
+        )
 
     def toggle_feed_posting(self, enabled):
-        if self.session_sync is None:
-            self.feed_action.setChecked(False)
-            return
-        try:
-            self.session_sync.set_publish_to_feed(enabled)
-        except (OSError, ValueError):
-            error_dialog(
-                self.gui,
-                "Feed preference unavailable",
-                "Could not save the feed posting preference.",
-                show=True,
-            )
-        self.feed_action.setChecked(
-            self.session_sync.state.get("publish_to_feed", False)
+        sync = self.session_sync
+        self._apply_toggle(
+            self.feed_action,
+            available=sync is not None,
+            needs_token=False,
+            apply=lambda: sync.set_publish_to_feed(enabled),
+            saved=lambda: sync.state.get("publish_to_feed", False),
+            failure_title="Feed preference unavailable",
+            failure_message="Could not save the feed posting preference.",
         )
-        self.refresh_sessions_window()
 
     def toggle_highlights(self, enabled):
-        if self.highlights is None:
-            self.highlight_action.setChecked(False)
+        highlights = self.highlights
+        self._apply_toggle(
+            self.highlight_action,
+            available=highlights is not None,
+            needs_token=enabled,
+            apply=lambda: highlights.set_enabled(enabled),
+            saved=lambda: highlights.state["enabled"],
+            failure_title="Highlight sync unavailable",
+            failure_message="Could not save or baseline annotations. Try again "
+            "after the viewer has finished saving.",
+        )
+
+    def _apply_toggle(
+        self,
+        menu_action,
+        available: bool,
+        needs_token: bool,
+        apply: Callable[[], object],
+        saved: Callable[[], bool],
+        failure_title: str,
+        failure_message: str,
+    ):
+        """Save a sync setting; afterwards the checkmark shows what was saved."""
+        if not available:
+            menu_action.setChecked(False)
             return
-        if enabled and not prefs.get("token") and not self.metadata_sync.set_token():
-            self.highlight_action.setChecked(False)
+        if (
+            needs_token
+            and not prefs.get("token")
+            and not self.metadata_sync.set_token()
+        ):
+            menu_action.setChecked(False)
             return
         try:
-            self.highlights.set_enabled(enabled)
+            apply()
         except (OSError, ValueError):
-            self.highlight_action.setChecked(self.highlights.state["enabled"])
-            error_dialog(
-                self.gui,
-                "Highlight sync unavailable",
-                "Could not save or baseline annotations. Try again after the viewer "
-                "has finished saving.",
-                show=True,
-            )
+            error_dialog(self.gui, failure_title, failure_message, show=True)
+        menu_action.setChecked(saved())
+        self.refresh_sessions_window()
 
     def show_highlight_status(self):
         if self.highlights is None:
