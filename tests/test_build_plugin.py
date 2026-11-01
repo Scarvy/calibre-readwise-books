@@ -16,8 +16,14 @@ def test_build_embeds_distinct_development_and_release_channels(tmp_path):
             capture_output=True,
         )
         with zipfile.ZipFile(path) as plugin:
-            assert plugin.read("build_info.py") == f"IS_DEV = {not release}\n".encode()
+            registration = plugin.read("__init__.py").decode()
+            assert f"\nIS_DEV = {not release}  #" in registration
+            assert plugin.namelist().count("__init__.py") == 1
+            # Installing over an older copy re-runs only __init__.py, so it
+            # must not import plugin modules that could be the old copy's.
+            assert "calibre_plugins" not in registration.replace(
+                "calibre_plugins.readwise_books.ui:", ""
+            )
             assert plugin.read("plugin-import-name-readwise_books.txt") == b""
-            assert plugin.namelist().count("build_info.py") == 1
             assert "matching.py" in plugin.namelist()
             assert "diagnostics.py" not in plugin.namelist()

@@ -16,13 +16,13 @@ from typing import Any
 from calibre.constants import cache_dir, config_dir
 from calibre.gui2 import error_dialog, info_dialog, open_local_file, question_dialog
 from calibre.gui2.actions import InterfaceAction
+from calibre_plugins.readwise_books import IS_DEV
 from calibre_plugins.readwise_books.bookwise import (
     SessionStatus,
     local_timezone,
     session_item,
     skip_reason,
 )
-from calibre_plugins.readwise_books.build_info import IS_DEV
 from calibre_plugins.readwise_books.highlights import (
     Explanation,
     HighlightClient,
