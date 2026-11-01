@@ -102,6 +102,7 @@ class Tracker:
             end = datetime.fromisoformat(record["end"])
             if done is None or end > datetime.fromisoformat(done):
                 self.finished_until[record["book_key"]] = record["end"]
+        self._forget_finished()
         # poll() runs on a background thread in the plugin; the UI reads too.
         self.lock = threading.RLock()
         self.focused: bool | None = None
@@ -229,7 +230,51 @@ class Tracker:
             finished.append(record)
         if finished:
             self._write_state()
+            self._forget_finished()
         return finished
+
+    def _forget_finished(self):
+        """Keep in memory only events that can still change an open session.
+
+        Every poll rebuilds sessions from self.events, so without this the
+        work grows with all reading ever done. events.jsonl keeps it all.
+        What an open session can still use: its saves, the ends and focus
+        changes since the earliest of them, and the focus state at that time.
+        """
+        open_saves = [
+            event
+            for event in self.events
+            if event.get("event") == "position_saved"
+            and event.get("viewer_timestamp")
+            and not self._is_finished(event["key"], event["viewer_timestamp"])
+        ]
+        start = min(
+            (datetime.fromisoformat(e["viewer_timestamp"]) for e in open_saves),
+            default=None,
+        )
+        kept = [id(event) for event in open_saves]
+        focus_before = None
+        for event in self.events:
+            kind = event.get("event")
+            if kind not in ("focus_changed", "session_ended"):
+                continue
+            at = datetime.fromisoformat(event["at"])
+            if start is not None and at >= start:
+                kept.append(id(event))
+            elif kind == "focus_changed" and (
+                focus_before is None or at >= datetime.fromisoformat(focus_before["at"])
+            ):
+                focus_before = event
+        if focus_before is not None:
+            kept.append(id(focus_before))
+        keep = set(kept)
+        self.events = [event for event in self.events if id(event) in keep]
+
+    def _is_finished(self, key: str, timestamp: str) -> bool:
+        done = self.finished_until.get(key)
+        return done is not None and datetime.fromisoformat(
+            timestamp
+        ) <= datetime.fromisoformat(done)
 
     def _record_save(self, annots_file: Path, now: datetime):
         key = annots_file.stem

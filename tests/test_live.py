@@ -300,3 +300,25 @@ def test_last_window_closing_ends_everything_without_a_recent_save(env):
     env[3].now = T0 + timedelta(seconds=90)  # no save in the last 8 seconds
 
     assert [r["saves"] for r in t.poll()] == [2]
+
+
+def test_finished_reading_is_dropped_from_memory_but_focus_carries_over(env):
+    focused = lambda: ViewerState(True, frozenset({1}), frozenset({1}))
+    t = tracker(env, viewer=focused)
+    for session in range(3):
+        base = session * 3600
+        for second in (0, 30, 60, 90):
+            read(env, base + second)
+            t.poll()
+        t.end_session()
+    assert len(t.finished_sessions()) == 3
+    assert not any(e.get("event") == "position_saved" for e in t.events)
+    assert sum(e.get("event") == "focus_changed" for e in t.events) == 1
+
+    # A slow page straight after the prune still counts as a focused dwell.
+    for second in (4 * 3600, 4 * 3600 + 20, 4 * 3600 + 20 + 7 * 60):
+        read(env, second)
+        t.poll()
+    [session] = t.open_sessions()
+    assert session.saves == 3
+    assert len(tracker(env).finished_sessions()) == 3
