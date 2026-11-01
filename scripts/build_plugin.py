@@ -16,7 +16,6 @@ NOT_PACKAGED = {"__init__.py", "diagnostics.py"}  # diagnostics serve scripts/ o
 
 
 def build(output: Path | None = None, release: bool = False) -> Path:
-    channel = "release" if release else "development"
     output = output or ROOT / "dist" / (
         "readwise-books.zip" if release else "readwise-books-dev.zip"
     )
@@ -25,10 +24,7 @@ def build(output: Path | None = None, release: bool = False) -> Path:
         plugin.writestr(f"plugin-import-name-{IMPORT_NAME}.txt", "")
         for name in PLUGIN_FILES:
             plugin.write(ROOT / "plugin" / name, name)
-        plugin.writestr(
-            "build_info.py",
-            f'BUILD_CHANNEL = "{channel}"\nIS_DEV = BUILD_CHANNEL == "development"\n',
-        )
+        plugin.writestr("build_info.py", f"IS_DEV = {not release}\n")
         for module in sorted(SOURCE_DIR.glob("*.py")):
             if module.name not in NOT_PACKAGED:
                 plugin.write(module, module.name)

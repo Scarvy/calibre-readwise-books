@@ -16,10 +16,7 @@ def test_build_embeds_distinct_development_and_release_channels(tmp_path):
             capture_output=True,
         )
         with zipfile.ZipFile(path) as plugin:
-            assert plugin.read("build_info.py") == (
-                f'BUILD_CHANNEL = "{expected}"\n'
-                'IS_DEV = BUILD_CHANNEL == "development"\n'.encode()
-            )
+            assert plugin.read("build_info.py") == f"IS_DEV = {not release}\n".encode()
             assert plugin.read("plugin-import-name-readwise_books.txt") == b""
             assert plugin.namelist().count("build_info.py") == 1
             assert "matching.py" in plugin.namelist()
