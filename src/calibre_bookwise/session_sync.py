@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from .bookwise import SessionStatus, local_timezone, session_item, skip_reason
 from .live import session_from_record
+from .locking import unlocked
 from .matching import CalibreBook, plan_matches
 from .readwise_api import (
     BASE_URL,
@@ -270,15 +271,13 @@ class SessionSync:
                 payload["publish_to_feed"] = item.get("publish_to_feed", False)
                 item.update(status=SessionStatus.SENDING, error="")
                 self._save()  # a crash or ambiguous response must not resend
-                self.lock.release()
-                try:
-                    session_id = client.create_session(payload)
-                except Exception as error:  # noqa: BLE001 - any lost POST result is ambiguous
-                    upload_error = error
-                else:
-                    upload_error = None
-                finally:
-                    self.lock.acquire()
+                with unlocked(self.lock):
+                    try:
+                        session_id = client.create_session(payload)
+                    except Exception as error:  # noqa: BLE001 - any lost POST result is ambiguous
+                        upload_error = error
+                    else:
+                        upload_error = None
                 if upload_error is not None:
                     item.update(
                         status=SessionStatus.NEEDS_REVIEW, error=str(upload_error)
@@ -293,26 +292,21 @@ class SessionSync:
     ) -> int | None:
         if key in self.state["book_ids"]:
             return self.state["book_ids"][key]
-        self.lock.release()
-        try:
+        with unlocked(self.lock):
             remote_books = client.list_books()
-        finally:
-            self.lock.acquire()
         if not self._can_send(item):
             return None
         [match] = plan_matches([book], remote_books)
         if match.bookwise_id is not None:
             book_id = match.bookwise_id
         elif match.create_item is not None:
-            self.lock.release()
             try:
-                book_id = client.create_book(match.create_item)
+                with unlocked(self.lock):
+                    book_id = client.create_book(match.create_item)
             except ReadwiseError as error:
                 raise BookCreationUncertain(
                     f"Book creation outcome unknown: {error}. Check Readwise before retrying."
                 ) from error
-            finally:
-                self.lock.acquire()
         else:
             return None
         self.state["book_ids"][key] = book_id

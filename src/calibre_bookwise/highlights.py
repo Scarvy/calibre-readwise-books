@@ -13,6 +13,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple, Protocol
 
+from .locking import unlocked
 from .matching import CalibreBook
 from .readwise_api import ApiClient, RateLimited, ReadwiseError
 from .storage import atomic_write_json
@@ -378,11 +379,8 @@ class HighlightSync:
                         payload = {"note": item["payload"]["note"]}
                     else:
                         payload = item["payload"]
-                    self.lock.release()
-                    try:
+                    with unlocked(self.lock):
                         uploaded_id = client.send(payload, remote_id)
-                    finally:
-                        self.lock.acquire()
                     item["remote_id"] = uploaded_id
                     item["sent_note"] = payload.get("note", "")
                     item["status"] = HighlightStatus.UPLOADED
