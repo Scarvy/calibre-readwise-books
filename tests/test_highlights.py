@@ -295,6 +295,32 @@ def test_missing_remote_id_is_not_acknowledged():
         client.send({"text": "Passage"})
 
 
+def test_note_edited_during_upload_keeps_remote_id(setup):
+    sync, path, now, books = setup
+    sync.set_enabled(True)
+    write(path, highlight())
+    sync.poll(books, None)
+    now[0] += 6
+
+    class EditDuringSend(FakeClient):
+        def send(self, payload, remote_id=None):
+            if not self.calls:
+                # Another poll sees the note edit while this request is in flight.
+                write(path, highlight(notes="Edited"))
+                sync.poll(books, None)
+            return super().send(payload, remote_id)
+
+    client = EditDuringSend()
+    sync.poll(books, client)
+    item = sync.state["items"]["book:one"]
+    assert item["remote_id"] == 123
+    assert item["status"] == "pending"
+    now[0] += 6
+    sync.poll(books, client)
+    assert client.calls[-1] == ({"note": "Edited"}, 123)
+    assert len(client.calls) == 2
+
+
 def test_explanation_says_why_a_pending_highlight_waits(setup):
     sync, path, _now, books = setup
     write(path, highlight())

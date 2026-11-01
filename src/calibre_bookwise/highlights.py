@@ -401,21 +401,17 @@ class HighlightSync:
                 # Don't upload queued books from a different active library.
                 if book_key_of(key) not in books:
                     continue
+                remote_id = item.get("remote_id")
+                if remote_id is not None:
+                    if item["payload"]["note"] == item.get("sent_note"):
+                        item["status"] = HighlightStatus.UPLOADED
+                        continue
+                    payload = {"note": item["payload"]["note"]}
+                else:
+                    payload = item["payload"]
                 try:
-                    remote_id = item.get("remote_id")
-                    if remote_id is not None:
-                        if item["payload"]["note"] == item.get("sent_note"):
-                            item["status"] = HighlightStatus.UPLOADED
-                            continue
-                        payload = {"note": item["payload"]["note"]}
-                    else:
-                        payload = item["payload"]
                     with unlocked(self.lock):
                         uploaded_id = client.send(payload, remote_id)
-                    item["remote_id"] = uploaded_id
-                    item["sent_note"] = payload.get("note", "")
-                    item["status"] = HighlightStatus.UPLOADED
-                    item["error"] = ""
                 except (OSError, ValueError, ReadwiseError) as error:
                     item["error"] = str(error)
                     if isinstance(error, HighlightRejected):
@@ -423,5 +419,15 @@ class HighlightSync:
                     else:
                         delay = error.delay if isinstance(error, RateLimited) else 60
                         self.state["retry_at"] = now + delay
+                else:
+                    # Another poll may have replaced the item (a note edited
+                    # mid-request). Keep the id on whatever is there now, or
+                    # the next poll would create the highlight a second time.
+                    current = items.setdefault(key, item)
+                    current["remote_id"] = uploaded_id
+                    current["sent_note"] = payload.get("note", "")
+                    if current is item:
+                        item.update(status=HighlightStatus.UPLOADED, error="")
+                    # else it stays pending; the next poll sends any new note.
                 self._save()
                 break
