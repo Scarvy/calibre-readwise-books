@@ -10,7 +10,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 IMPORT_NAME = "readwise_books"  # plugins import as calibre_plugins.<this>
-PLUGIN_FILES = ["ui.py", "metadata_sync.py", "images/readwise-books.png"]
+PLUGIN_FILES = [
+    "ui.py",
+    "metadata_sync.py",
+    "readwise_web.py",
+    "images/readwise-books.png",
+]
 DEV_LINE = "IS_DEV = True"  # in plugin/__init__.py; release builds flip it
 SOURCE_DIR = ROOT / "src" / "calibre_bookwise"
 NOT_PACKAGED = {"__init__.py", "diagnostics.py"}  # diagnostics serve scripts/ only
