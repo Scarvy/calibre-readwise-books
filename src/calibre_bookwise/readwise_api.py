@@ -40,9 +40,11 @@ class RateLimited(ReadwiseError):
 Fetch = Callable[[urllib.request.Request], tuple[int, dict, bytes]]
 
 
-def urlopen(request: urllib.request.Request) -> tuple[int, dict, bytes]:
+def urlopen(
+    request: urllib.request.Request, timeout: float = 30
+) -> tuple[int, dict, bytes]:
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, dict(response.headers), response.read()
     except urllib.error.HTTPError as error:
         return error.code, dict(error.headers or {}), error.read()
