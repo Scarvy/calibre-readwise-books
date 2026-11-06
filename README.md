@@ -33,6 +33,7 @@ Open a book from your Calibre library in the e-book viewer. The plugin records f
 - **Sync settings → Post to feed** adds newly uploaded sessions to your Readwise Books feed. It is off by default and does not send sessions by itself.
 - **Sync settings → Sync highlights and notes** uploads new highlights from the e-book viewer. Earlier highlights can be sent from the Highlights tab. Notes on highlights uploaded by this plugin update when edited in Calibre.
 - **Sync library metadata from Readwise** fills Calibre custom columns. On the first run, Calibre must restart after creating them. If the selected book's Readwise progress changed, you can choose to open its EPUB near that percentage. The position is approximate.
+- **Upload selected EPUB to Readwise Books…** sends one selected library EPUB through the [Readwise Books uploads API](https://readwise.io/books_api#uploads) using your access token. The EPUBs tab shows which Calibre EPUBs are already in Readwise. Uploads happen only when you select a book and start one.
 
 Sync is one way for highlights and notes; deleting a highlight in Calibre does not delete its Readwise copy. TODO: see if it can be a two-way sync.
 
