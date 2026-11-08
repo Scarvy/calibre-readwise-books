@@ -19,11 +19,11 @@ class ReadwiseBooksPlugin(InterfaceActionBase):
     name = "Readwise Books"
     description = (
         "Records reading in Calibre's e-book viewer as reading sessions for "
-        "Readwise Books, with opt-in session and highlight uploads."
+        "Readwise Books, with opt-in session, highlight, and EPUB uploads."
         + (" Development build." if IS_DEV else " Release build.")
     )
     supported_platforms: ClassVar[list[str]] = ["osx", "windows", "linux"]
     author = "Scott Carvalho"
-    version = (0, 1, 0)
+    version = (0, 2, 0)
     minimum_calibre_version = (8, 0, 0)
     actual_plugin = "calibre_plugins.readwise_books.ui:ReadwiseBooksAction"
