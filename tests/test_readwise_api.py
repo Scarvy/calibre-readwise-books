@@ -42,22 +42,6 @@ def test_follows_next_pages_with_token_and_only_gets():
     assert {r.get_header("Authorization") for r in fake.requests} == {"Token tok123"}
 
 
-def test_lists_all_upload_pages():
-    fake = FakeReadwise(
-        (200, {}, {"results": [{"id": 9}], "next": BASE_URL + "uploads?cursor=abc"}),
-        (200, {}, {"results": [{"id": 8}], "next": None}),
-    )
-
-    uploads = ReadOnlyClient("token", fetch=fake).list_uploads()
-
-    assert [item["id"] for item in uploads] == [9, 8]
-    assert [request.full_url for request in fake.requests] == [
-        BASE_URL + "uploads?limit=1000",
-        BASE_URL + "uploads?cursor=abc",
-    ]
-    assert {request.get_method() for request in fake.requests} == {"GET"}
-
-
 def test_waits_out_rate_limit_then_retries():
     waits = []
     fake = FakeReadwise(
@@ -106,7 +90,7 @@ def test_refuses_to_follow_links_off_readwise():
 def test_client_has_no_way_to_write():
     public = {name for name in dir(ReadOnlyClient) if not name.startswith("_")}
 
-    assert public == {"list_books", "list_sessions", "list_uploads"}
+    assert public == {"list_books", "list_sessions"}
 
 
 def test_every_client_reports_network_failures_the_same_way():

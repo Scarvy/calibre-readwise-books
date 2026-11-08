@@ -18,7 +18,7 @@ PLUGIN_FILES = [
 ]
 DEV_LINE = "IS_DEV = True"  # in plugin/__init__.py; release builds flip it
 SOURCE_DIR = ROOT / "src" / "calibre_bookwise"
-NOT_PACKAGED = {"__init__.py", "diagnostics.py"}  # diagnostics serve scripts/ only
+NOT_PACKAGED = {"__init__.py"}  # plugin/__init__.py is used instead
 
 
 def build(output: Path | None = None, release: bool = False) -> Path:

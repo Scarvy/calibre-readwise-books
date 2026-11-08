@@ -26,4 +26,3 @@ def test_build_embeds_distinct_development_and_release_channels(tmp_path):
             )
             assert plugin.read("plugin-import-name-readwise_books.txt") == b""
             assert "matching.py" in plugin.namelist()
-            assert "diagnostics.py" not in plugin.namelist()

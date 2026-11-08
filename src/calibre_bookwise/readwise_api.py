@@ -98,10 +98,6 @@ class ReadOnlyClient(ApiClient):
         """Every reading session (not deleted)."""
         return self._get_all("sessions")
 
-    def list_uploads(self) -> list[dict]:
-        """Every upload returned by the Readwise Books uploads endpoint."""
-        return self._get_all("uploads")
-
     def _get_all(self, path: str) -> list[dict]:
         url = BASE_URL + path + "?" + urllib.parse.urlencode({"limit": PAGE_SIZE})
         results = []

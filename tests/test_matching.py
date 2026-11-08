@@ -1,8 +1,5 @@
-import sqlite3
-
 import pytest
 
-from calibre_bookwise.diagnostics import create_requests, read_calibre_books
 from calibre_bookwise.matching import (
     CalibreBook,
     calibre_book_from_db,
@@ -143,47 +140,6 @@ def test_no_identifiers_and_unknown_author_cannot_be_matched():
 
     assert match.action == "cannot match"
     assert match.problem
-
-
-def test_create_requests_batch_by_ten():
-    matches = plan_matches(
-        [book(i, f"Book {i}", ["Ann Author"]) for i in range(12)], []
-    )
-
-    assert [len(body["items"]) for body in create_requests(matches)] == [10, 2]
-
-
-@pytest.fixture
-def library(tmp_path):
-    with sqlite3.connect(tmp_path / "metadata.db") as db:
-        db.executescript(
-            """
-            CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT);
-            CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT);
-            CREATE TABLE books_authors_link (id INTEGER PRIMARY KEY, book INTEGER, author INTEGER);
-            CREATE TABLE identifiers (id INTEGER PRIMARY KEY, book INTEGER, type TEXT, val TEXT);
-            INSERT INTO books VALUES (4, 'JavaScript: The Good Parts'), (13, 'Interaction Design');
-            INSERT INTO authors VALUES (1, 'Douglas Crockford'), (2, 'Yvonne Rogers'), (3, 'Helen Sharp');
-            INSERT INTO books_authors_link (book, author) VALUES (4, 1), (13, 2), (13, 3);
-            INSERT INTO identifiers (book, type, val) VALUES
-                (4, 'isbn', '9780596517748'), (4, 'amazon', '0596517742');
-            """
-        )
-    return tmp_path
-
-
-def test_read_calibre_books(library):
-    assert read_calibre_books(library) == [
-        CalibreBook(
-            4,
-            "JavaScript: The Good Parts",
-            ("Douglas Crockford",),
-            "9780596517748",
-            "0596517742",
-        ),
-        CalibreBook(13, "Interaction Design", ("Yvonne Rogers", "Helen Sharp")),
-    ]
-    assert [b.calibre_id for b in read_calibre_books(library, [13])] == [13]
 
 
 def test_live_copy_wins_over_a_deleted_duplicate():
