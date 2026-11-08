@@ -163,10 +163,13 @@ class SessionSync:
         with self.lock:
             return self.state.get("publish_to_feed", False)
 
-    def book_id_for(self, book_key: str) -> int | None:
+    def book_id_for(self, book_key: str, scope: str) -> int | None:
         """The Readwise book id this book file's sessions go to, once known."""
         with self.lock:
-            return self.state["book_ids"].get(book_key)
+            saved = self.state["book_ids"].get(book_key)
+            if isinstance(saved, dict) and saved.get("scope") == scope:
+                return saved.get("id")
+            return None
 
     def set_publish_to_feed(self, enabled: bool):
         """Set the feed preference for sessions queued in the future."""
@@ -246,6 +249,7 @@ class SessionSync:
         records: list[dict],
         books: Mapping[str, CalibreBook],
         client: SessionSender | None,
+        scope: str,
     ):
         with self.lock:
             if self._register(records):
@@ -266,7 +270,9 @@ class SessionSync:
                     self._save()
                     break
                 try:
-                    book_id = self._book_id(record["book_key"], book, item, client)
+                    book_id = self._book_id(
+                        record["book_key"], book, item, client, scope
+                    )
                 except BookCreationUncertain as error:
                     item.update(status=SessionStatus.NEEDS_REVIEW, error=str(error))
                     self._save()
@@ -305,11 +311,11 @@ class SessionSync:
                 break
 
     def _book_id(
-        self, key: str, book: CalibreBook, item: dict, client: SessionSender
+        self, key: str, book: CalibreBook, item: dict, client: SessionSender, scope: str
     ) -> int | None:
-        if key in self.state["book_ids"]:
-            return self.state["book_ids"][key]
-        saved = read_book_map(self.data_dir)  # links metadata sync has made
+        if (known := self.book_id_for(key, scope)) is not None:
+            return known
+        saved = read_book_map(self.data_dir, scope)  # links metadata sync has made
         if book.calibre_id in saved:
             book_id = saved[book.calibre_id]
         else:
@@ -320,7 +326,7 @@ class SessionSync:
             [match] = plan_matches([book], remote_books)
             if match.bookwise_id is not None:
                 book_id = match.bookwise_id
-                remember(self.data_dir, definite_links([match]))
+                remember(self.data_dir, scope, definite_links([match]))
             elif match.create_item is not None:
                 try:
                     with unlocked(self.lock):
@@ -331,9 +337,9 @@ class SessionSync:
                     raise BookCreationUncertain(
                         f"Book creation outcome unknown: {error}. Check Readwise before retrying."
                     ) from error
-                remember(self.data_dir, {book.calibre_id: book_id})
+                remember(self.data_dir, scope, {book.calibre_id: book_id})
             else:
                 return None
-        self.state["book_ids"][key] = book_id
+        self.state["book_ids"][key] = {"scope": scope, "id": book_id}
         self._save()
         return book_id

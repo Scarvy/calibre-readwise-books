@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from calibre_bookwise.book_map import read_book_map, remember
+from calibre_bookwise.book_map import book_map_scope, read_book_map, remember
 from calibre_bookwise.matching import CalibreBook
 from calibre_bookwise.readwise_api import RateLimited, ReadwiseError
 from calibre_bookwise.session_sync import BooksClient, SessionSync
@@ -25,6 +25,7 @@ def record(start="2026-10-30T10:00:00+00:00", finished="2026-10-30T10:05:00+00:0
 
 
 BOOKS = {"book": CalibreBook(7, "A Book", ("An Author",))}
+SCOPE = book_map_scope("test-library", "test-token")
 
 
 class FakeClient:
@@ -53,14 +54,14 @@ def test_default_dry_run_and_mode_switch_only_sends_future_sessions(tmp_path):
     old = record()
     sync = SessionSync(tmp_path, [old])
     client = FakeClient()
-    sync.poll([old], BOOKS, client)
+    sync.poll([old], BOOKS, client, SCOPE)
     assert not client.sessions
     assert sync.status(old)["status"] == "local"
 
     sync.set_mode("send", [old])
     new = record("2026-10-30T11:00:00+00:00", "2026-10-30T11:05:00+00:00")
     new["end"] = "2026-10-30T11:04:00+00:00"
-    sync.poll([old, new], BOOKS, client)
+    sync.poll([old, new], BOOKS, client, SCOPE)
     assert len(client.sessions) == 1
     assert client.sessions[0]["book_id"] == 42
     assert client.sessions[0]["publish_to_feed"] is False
@@ -68,7 +69,7 @@ def test_default_dry_run_and_mode_switch_only_sends_future_sessions(tmp_path):
     assert sync.status(old)["status"] == "local"
 
     restarted = SessionSync(tmp_path, [old, new])
-    restarted.poll([old, new], BOOKS, client)
+    restarted.poll([old, new], BOOKS, client, SCOPE)
     assert len(client.sessions) == 1
 
 
@@ -79,7 +80,7 @@ def test_selected_local_session_sends_while_dry_run_remains_on(tmp_path):
     sync = SessionSync(tmp_path, [first, second])
     sync.queue_locals([second])
     client = FakeClient()
-    sync.poll([first, second], BOOKS, client)
+    sync.poll([first, second], BOOKS, client, SCOPE)
     assert sync.state["mode"] == "dry_run"
     assert sync.status(first)["status"] == "local"
     assert sync.status(second)["status"] == "uploaded"
@@ -96,14 +97,14 @@ def test_feed_toggle_applies_to_future_automatic_and_manual_uploads(tmp_path):
     sync.set_mode("send", [local])
     future = record("2026-10-30T11:00:00+00:00", "2026-10-30T11:05:00+00:00")
     future["end"] = "2026-10-30T11:04:00+00:00"
-    sync.poll([local, future], BOOKS, None)
+    sync.poll([local, future], BOOKS, None, SCOPE)
     sync.set_publish_to_feed(False)
     assert sync.publish_to_feed(local) is True
     assert sync.publish_to_feed(future) is True
     assert SessionSync(tmp_path, [local, future]).state["publish_to_feed"] is False
     client = FakeClient()
-    sync.poll([local, future], BOOKS, client)
-    sync.poll([local, future], BOOKS, client)
+    sync.poll([local, future], BOOKS, client, SCOPE)
+    sync.poll([local, future], BOOKS, client, SCOPE)
     assert [item["publish_to_feed"] for item in client.sessions] == [True, True]
 
 
@@ -111,12 +112,12 @@ def test_existing_pending_session_stays_off_feed_after_toggle(tmp_path):
     sync = SessionSync(tmp_path, [])
     sync.set_mode("send", [])
     entry = record()
-    sync.poll([entry], BOOKS, None)
+    sync.poll([entry], BOOKS, None, SCOPE)
     sync.state["items"][next(iter(sync.state["items"]))].pop("publish_to_feed")
     sync._save()  # simulate state written by an earlier plugin version
     sync.set_publish_to_feed(True)
     client = FakeClient()
-    sync.poll([entry], BOOKS, client)
+    sync.poll([entry], BOOKS, client, SCOPE)
     assert client.sessions[0]["publish_to_feed"] is False
 
 
@@ -127,9 +128,9 @@ def test_multiple_selected_local_sessions_queue_without_changing_mode(tmp_path):
     sync = SessionSync(tmp_path, [first, second])
     sync.queue_locals([first, second])
     client = FakeClient()
-    sync.poll([first, second], BOOKS, client)
+    sync.poll([first, second], BOOKS, client, SCOPE)
     assert len(client.sessions) == 1  # one request per poll
-    sync.poll([first, second], BOOKS, client)
+    sync.poll([first, second], BOOKS, client, SCOPE)
     assert len(client.sessions) == 2
     assert sync.state["mode"] == "dry_run"
     assert [sync.status(r)["status"] for r in (first, second)] == [
@@ -154,7 +155,7 @@ def test_unmatched_book_is_created_once_before_session(tmp_path):
     sync.set_mode("send", [])
     client = FakeClient(remote_books=[])
     entry = record()
-    sync.poll([entry], BOOKS, client)
+    sync.poll([entry], BOOKS, client, SCOPE)
     assert client.created_books == [
         {
             "product": {"title": "A Book", "author": "An Author"},
@@ -162,7 +163,10 @@ def test_unmatched_book_is_created_once_before_session(tmp_path):
         }
     ]
     assert len(client.sessions) == 1
-    assert SessionSync(tmp_path, [entry]).state["book_ids"]["book"] == 42
+    assert SessionSync(tmp_path, [entry]).state["book_ids"]["book"] == {
+        "scope": SCOPE,
+        "id": 42,
+    }
 
 
 def test_uncertain_session_post_is_never_retried_automatically(tmp_path):
@@ -175,15 +179,15 @@ def test_uncertain_session_post_is_never_retried_automatically(tmp_path):
 
     client = FailingClient()
     entry = record()
-    sync.poll([entry], BOOKS, client)
+    sync.poll([entry], BOOKS, client, SCOPE)
     assert sync.status(entry)["status"] == "needs review"
     restarted = SessionSync(tmp_path, [entry])
-    restarted.poll([entry], BOOKS, FakeClient())
+    restarted.poll([entry], BOOKS, FakeClient(), SCOPE)
     assert restarted.status(entry)["status"] == "needs review"
     client = FakeClient()
     restarted.set_mode("dry_run", [entry])
     restarted.retry_after_review(entry)
-    restarted.poll([entry], BOOKS, client)
+    restarted.poll([entry], BOOKS, client, SCOPE)
     assert restarted.status(entry)["status"] == "uploaded"
     assert len(client.sessions) == 1
 
@@ -192,12 +196,12 @@ def test_switching_back_to_dry_run_keeps_queued_sessions_local(tmp_path):
     sync = SessionSync(tmp_path, [])
     sync.set_mode("send", [])
     entry = record()
-    sync.poll([entry], BOOKS, None)
+    sync.poll([entry], BOOKS, None, SCOPE)
     assert sync.status(entry)["status"] == "pending"
     sync.set_mode("dry_run", [entry])
     sync.set_mode("send", [entry])
     client = FakeClient()
-    sync.poll([entry], BOOKS, client)
+    sync.poll([entry], BOOKS, client, SCOPE)
     assert sync.status(entry)["status"] == "local"
     assert not client.sessions
 
@@ -206,7 +210,7 @@ def test_interrupted_sending_requires_review(tmp_path):
     entry = record()
     sync = SessionSync(tmp_path, [])
     sync.set_mode("send", [])
-    sync.poll([entry], BOOKS, None)
+    sync.poll([entry], BOOKS, None, SCOPE)
     key = next(iter(sync.state["items"]))
     sync.state["items"][key]["status"] = "sending"
     sync._save()
@@ -222,7 +226,7 @@ def test_uncertain_book_creation_is_not_retried(tmp_path):
     sync = SessionSync(tmp_path, [])
     sync.set_mode("send", [])
     entry = record()
-    sync.poll([entry], BOOKS, FailingBookClient(remote_books=[]))
+    sync.poll([entry], BOOKS, FailingBookClient(remote_books=[]), SCOPE)
     assert sync.status(entry)["status"] == "needs review"
 
 
@@ -245,15 +249,15 @@ def test_books_client_posts_off_feed_session_and_checks_result():
 
 def test_settings_and_book_ids_are_readable_without_touching_state(tmp_path):
     sync = SessionSync(tmp_path, [])
-    assert (sync.sending, sync.feed_default, sync.book_id_for("book")) == (
+    assert (sync.sending, sync.feed_default, sync.book_id_for("book", SCOPE)) == (
         False,
         False,
         None,
     )
     sync.set_mode("send", [])
     sync.set_publish_to_feed(True)
-    sync.poll([record()], BOOKS, FakeClient())
-    assert (sync.sending, sync.feed_default, sync.book_id_for("book")) == (
+    sync.poll([record()], BOOKS, FakeClient(), SCOPE)
+    assert (sync.sending, sync.feed_default, sync.book_id_for("book", SCOPE)) == (
         True,
         True,
         42,
@@ -261,7 +265,7 @@ def test_settings_and_book_ids_are_readable_without_touching_state(tmp_path):
 
 
 def test_book_linked_by_metadata_sync_is_used_without_lookup(tmp_path):
-    remember(tmp_path, {7: 555})
+    remember(tmp_path, SCOPE, {7: 555})
     sync = SessionSync(tmp_path, [])
     sync.set_mode("send", [])
 
@@ -270,7 +274,7 @@ def test_book_linked_by_metadata_sync_is_used_without_lookup(tmp_path):
             raise AssertionError("the saved link should be used")
 
     client = NoLookups()
-    sync.poll([record()], BOOKS, client)
+    sync.poll([record()], BOOKS, client, SCOPE)
     assert client.sessions[0]["book_id"] == 555
     assert not client.created_books
 
@@ -278,8 +282,27 @@ def test_book_linked_by_metadata_sync_is_used_without_lookup(tmp_path):
 def test_created_book_is_remembered_for_metadata_sync(tmp_path):
     sync = SessionSync(tmp_path, [])
     sync.set_mode("send", [])
-    sync.poll([record()], BOOKS, FakeClient(remote_books=[]))
-    assert read_book_map(tmp_path) == {7: 42}
+    sync.poll([record()], BOOKS, FakeClient(remote_books=[]), SCOPE)
+    assert read_book_map(tmp_path, SCOPE) == {7: 42}
+
+
+def test_resolved_book_id_is_not_reused_for_another_account(tmp_path):
+    sync = SessionSync(tmp_path, [])
+    sync.set_mode("send", [])
+    first = record()
+    sync.poll([first], BOOKS, FakeClient(), SCOPE)
+
+    other_scope = book_map_scope("test-library", "other-token")
+    second = record("2026-10-30T11:00:00+00:00", "2026-10-30T11:05:00+00:00")
+    second["end"] = "2026-10-30T11:04:00+00:00"
+    other = FakeClient(
+        remote_books=[{"id": 77, "title": "A Book", "author": "An Author"}]
+    )
+    sync.poll([first, second], BOOKS, other, other_scope)
+
+    assert other.sessions[0]["book_id"] == 77
+    assert sync.book_id_for("book", SCOPE) is None
+    assert sync.book_id_for("book", other_scope) == 77
 
 
 @pytest.mark.parametrize(
@@ -295,13 +318,13 @@ def test_refused_session_post_waits_and_retries_by_itself(tmp_path, refusal):
             raise refusal
 
     entry = record()
-    sync.poll([entry], BOOKS, RefusingClient())
+    sync.poll([entry], BOOKS, RefusingClient(), SCOPE)
     assert sync.status(entry)["status"] == "pending"
     client = FakeClient()
-    sync.poll([entry], BOOKS, client)
+    sync.poll([entry], BOOKS, client, SCOPE)
     assert not client.sessions  # waits out the delay
     now[0] += 61
-    sync.poll([entry], BOOKS, client)
+    sync.poll([entry], BOOKS, client, SCOPE)
     assert sync.status(entry)["status"] == "uploaded"
 
 
@@ -313,6 +336,6 @@ def test_refused_book_creation_is_retried_not_held_for_review(tmp_path):
     sync = SessionSync(tmp_path, [])
     sync.set_mode("send", [])
     entry = record()
-    sync.poll([entry], BOOKS, RefusingBookClient(remote_books=[]))
+    sync.poll([entry], BOOKS, RefusingBookClient(remote_books=[]), SCOPE)
     assert sync.status(entry)["status"] == "pending"
     assert sync.state["retry_at"] > 0

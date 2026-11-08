@@ -17,6 +17,7 @@ from calibre.constants import cache_dir, config_dir
 from calibre.gui2 import error_dialog, info_dialog, open_local_file, question_dialog
 from calibre.gui2.actions import InterfaceAction
 from calibre_plugins.readwise_books import IS_DEV
+from calibre_plugins.readwise_books.book_map import book_map_scope
 from calibre_plugins.readwise_books.bookwise import (
     SessionStatus,
     local_timezone,
@@ -248,7 +249,12 @@ class ReadwiseBooksAction(InterfaceAction):
         if not self.polling:
             self.index_new_books()  # before the tracker looks the books up
             self.polling = True
-            threading.Thread(target=self._poll_in_background, daemon=True).start()
+            scope = book_map_scope(self.gui.current_db.library_id, self.token)
+            threading.Thread(
+                target=self._poll_in_background,
+                args=(self.books.copy(), self.token, scope),
+                daemon=True,
+            ).start()
         if self.dialog is not None and self.dialog.isVisible():
             self.dialog.refresh_current()
 
@@ -264,17 +270,17 @@ class ReadwiseBooksAction(InterfaceAction):
                 15000,
             )
 
-    def _poll_in_background(self):
+    def _poll_in_background(self, books, token, scope):
         try:
             self.tracker.poll()
             if self.session_sync is not None:
-                client = BooksClient(self.token) if self.token else None
+                client = BooksClient(token) if token else None
                 self.session_sync.poll(
-                    self.tracker.finished_sessions(), self.books.copy(), client
+                    self.tracker.finished_sessions(), books, client, scope
                 )
             if self.highlights is not None:
-                client = HighlightClient(self.token) if self.token else None
-                self.highlights.poll(self.books.copy(), client)
+                client = HighlightClient(token) if token else None
+                self.highlights.poll(books, client)
             self.poll_failed = False
         # A tracker bug must never break the plugin: log it once and keep going.
         except Exception:  # noqa: BLE001
@@ -792,7 +798,10 @@ class SessionsPanel(SyncPanel):
             return
         # A local session has no resolved Readwise book id yet.
         item = session_item(session, 0, local_timezone())
-        bookwise_id = sync.book_id_for(session.book_key) if sync else None
+        scope = book_map_scope(
+            self.action.gui.current_db.library_id, prefs.get("token", "")
+        )
+        bookwise_id = sync.book_id_for(session.book_key, scope) if sync else None
         item["book_id"] = (
             bookwise_id or f"<Bookwise id for Calibre book {session.book_id}>"
         )

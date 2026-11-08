@@ -11,6 +11,7 @@ from pathlib import Path
 from calibre.gui2 import error_dialog, info_dialog, question_dialog
 from calibre.utils.config import JSONConfig
 from calibre_plugins.readwise_books.book_map import (
+    book_map_scope,
     definite_links,
     read_book_map,
     remember,
@@ -87,9 +88,16 @@ class MetadataSync:
             return
         db = self.gui.current_db.new_api
         books = [calibre_book_from_db(db, book_id) for book_id in db.all_book_ids()]
-        self.worker = SyncWorker(
-            self.gui, prefs["token"], books, read_book_map(self.data_dir)
-        )
+        scope = book_map_scope(self.gui.current_db.library_id, prefs["token"])
+        try:
+            saved = read_book_map(self.data_dir, scope)
+        except ValueError as error:
+            error_dialog(
+                self.gui, "Readwise book links unavailable", str(error), show=True
+            )
+            return
+        self.worker_scope = scope
+        self.worker = SyncWorker(self.gui, prefs["token"], books, saved)
         self.worker.finished_sync.connect(self.apply)
         self.gui.status_bar.show_message("Readwise Books: syncing metadata…", 0)
         self.worker.start()
@@ -131,6 +139,10 @@ class MetadataSync:
         if matches is None:
             error_dialog(self.gui, "Readwise sync failed", updates, show=True)
             return
+        if self.worker_scope != book_map_scope(
+            self.gui.current_db.library_id, prefs.get("token", "")
+        ):
+            return  # the library or Readwise account changed while fetching
         db = self.gui.current_db.new_api
         selected = self.gui.current_view().get_selected_ids()
         selected_id = next(iter(selected)) if len(selected) == 1 else None
@@ -142,7 +154,7 @@ class MetadataSync:
         for label, values in updates.items():
             db.set_field(f"#{label}", values)
         self.gui.library_view.model().refresh_ids(list(updates["rw_status"]))
-        remember(self.data_dir, definite_links(matches))
+        remember(self.data_dir, self.worker_scope, definite_links(matches))
         in_readwise = sum(
             1 for v in updates["rw_status"].values() if v != NOT_IN_READWISE
         )

@@ -13,7 +13,7 @@ This repository builds a Calibre GUI plugin that records viewer sessions and opt
 - `src/calibre_bookwise/session_sync.py`: session upload state and Readwise Books POSTs.
 - `src/calibre_bookwise/highlights.py`: highlight upload state and Readwise API calls.
 - `src/calibre_bookwise/readwise_api.py`: `ApiClient`, through which every Readwise request goes, and the GET-only `ReadOnlyClient`.
-- `src/calibre_bookwise/book_map.py`: `book_map.json`, the Calibre to Readwise book links that metadata and session sync share.
+- `src/calibre_bookwise/book_map.py`: library- and account-scoped Calibre to Readwise book links shared by metadata and session sync. The old unscoped `book_map.json` is left untouched.
 - `src/calibre_bookwise/storage.py` and `locking.py`: atomic JSON writes, and releasing a sync lock around a network call.
 - `src/calibre_bookwise/diagnostics.py`: helpers for `scripts/` only; the build leaves it out of the plugin.
 - `src/calibre_bookwise/metadata.py`: custom column values.
@@ -30,6 +30,7 @@ This repository builds a Calibre GUI plugin that records viewer sessions and opt
 - Readwise Books session POSTs are not deduplicated. Persist `sending` before the request and mark uncertain outcomes `needs review`; never retry those automatically. Only a 401, 403 or 429, where Readwise refused the request outright, is retried automatically. Preserve `session_uploads.json` across restarts.
 - `sessions.jsonl` is the record of finished sessions: the tracker rebuilds `finished_until` from it on start, so a session is never finished, or queued, twice.
 - Highlight uploads are one way from Calibre to Readwise. Baseline existing annotations on first enable, retain upload state in `highlights.json`, and do not reset unreadable state: losing IDs can duplicate uploads. Validation errors require an explicit retry.
+- Saved book links are scoped by Calibre library ID and a hash of the Readwise token. Never reuse an unscoped numeric Calibre book ID from another library or account, or overwrite unreadable link state.
 - Metadata sync uses a GET only client and writes Calibre custom columns. It must not modify Readwise Books.
 
 ## Checks

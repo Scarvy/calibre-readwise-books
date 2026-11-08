@@ -1,11 +1,10 @@
-"""Which Readwise Books book each Calibre book is, shared by every feature.
+"""Definite Calibre-to-Readwise links, isolated by library and API token.
 
-book_map.json maps Calibre book id -> Readwise Books id. Only definite links
-are saved: ISBN and ASIN matches, and books this plugin created. Title
-matches are checked again each time, since a better match may appear.
-Stdlib only: this has to run inside Calibre's bundled Python 3.11.
+The former unscoped book_map.json is left untouched. Its numeric Calibre IDs
+cannot safely be assigned to a library or Readwise account after the fact.
 """
 
+import hashlib
 import json
 import threading
 from collections.abc import Iterable, Mapping
@@ -14,20 +13,45 @@ from pathlib import Path
 from .matching import Match
 from .storage import atomic_write_json
 
-FILE_NAME = "book_map.json"
-DEFINITE = ("isbn", "asin")  # Match.matched_by values worth remembering
-# Metadata sync (GUI thread) and session sync (poll thread) both write.
-_lock = threading.Lock()
+FILE_NAME = "book_map_scoped.json"
+DEFINITE = ("isbn", "asin")
+_lock = threading.Lock()  # metadata sync and session sync can both write
 
 
-def read_book_map(data_dir: Path) -> dict[int, int]:
+def book_map_scope(library_id: str, token: str) -> str:
+    """Opaque key for one Calibre library and one Readwise credential."""
+    identity = json.dumps([str(library_id), token.strip()])
+    return hashlib.sha256(identity.encode()).hexdigest()
+
+
+def _read_all(data_dir: Path) -> dict[str, dict[str, int]]:
+    path = data_dir / FILE_NAME
     try:
-        saved = json.loads((data_dir / FILE_NAME).read_text())
-        return {
-            int(calibre_id): bookwise_id for calibre_id, bookwise_id in saved.items()
-        }
-    except (OSError, ValueError, AttributeError):
+        saved = json.loads(path.read_text())
+    except FileNotFoundError:
         return {}
+    except (OSError, ValueError) as error:
+        raise ValueError(f"Cannot read {FILE_NAME}; restore it from backup.") from error
+    if not isinstance(saved, dict) or any(
+        not isinstance(scope, str)
+        or not isinstance(links, dict)
+        or any(
+            not str(book_id).isdigit()
+            or not isinstance(remote_id, int)
+            or isinstance(remote_id, bool)
+            for book_id, remote_id in links.items()
+        )
+        for scope, links in saved.items()
+    ):
+        raise ValueError(f"Invalid {FILE_NAME}; restore it from backup.")
+    return saved
+
+
+def read_book_map(data_dir: Path, scope: str) -> dict[int, int]:
+    return {
+        int(book_id): remote_id
+        for book_id, remote_id in _read_all(data_dir).get(scope, {}).items()
+    }
 
 
 def definite_links(matches: Iterable[Match]) -> dict[int, int]:
@@ -38,10 +62,14 @@ def definite_links(matches: Iterable[Match]) -> dict[int, int]:
     }
 
 
-def remember(data_dir: Path, links: Mapping[int, int]):
-    """Add these Calibre id -> Readwise id links to the saved map."""
+def remember(data_dir: Path, scope: str, links: Mapping[int, int]):
+    """Add definite links for this library and Readwise credential."""
     if not links:
         return
     with _lock:
-        saved = read_book_map(data_dir) | dict(links)
+        saved = _read_all(data_dir)
+        current = saved.get(scope, {}) | {
+            str(book_id): remote_id for book_id, remote_id in links.items()
+        }
+        saved[scope] = current
         atomic_write_json(data_dir / FILE_NAME, saved, indent=2, sort_keys=True)
