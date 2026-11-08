@@ -8,6 +8,7 @@ Reading sessions stay local. Highlight uploads are separately opt-in.
 import hashlib
 import json
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from pathlib import Path
@@ -17,13 +18,14 @@ from calibre.constants import cache_dir, config_dir
 from calibre.gui2 import error_dialog, info_dialog, open_local_file, question_dialog
 from calibre.gui2.actions import InterfaceAction
 from calibre_plugins.readwise_books import IS_DEV
-from calibre_plugins.readwise_books.book_map import book_map_scope
+from calibre_plugins.readwise_books.book_map import book_map_scope, read_book_map
 from calibre_plugins.readwise_books.bookwise import (
     SessionStatus,
     local_timezone,
     session_item,
     skip_reason,
 )
+from calibre_plugins.readwise_books.ebook_upload import LibraryStatus, library_status
 from calibre_plugins.readwise_books.highlights import (
     Explanation,
     HighlightClient,
@@ -36,9 +38,14 @@ from calibre_plugins.readwise_books.live import (
     macos_viewer_state,
     session_from_record,
 )
-from calibre_plugins.readwise_books.matching import LibraryBook, calibre_book_from_db
+from calibre_plugins.readwise_books.matching import (
+    LibraryBook,
+    calibre_book_from_db,
+    plan_matches,
+)
 from calibre_plugins.readwise_books.metadata_sync import MetadataSync, prefs
 from calibre_plugins.readwise_books.progress import book_progress
+from calibre_plugins.readwise_books.readwise_web import EpubUploader, RemoteBooksWorker
 from calibre_plugins.readwise_books.session_sync import (
     BooksClient,
     SessionMode,
@@ -48,6 +55,7 @@ from calibre_plugins.readwise_books.session_sync import (
 from qt.core import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -133,6 +141,16 @@ class ReadwiseBooksAction(InterfaceAction):
             self.metadata_sync.open_selected_at_readwise_progress,
         )
         position_action.setIcon(QIcon.ic("view.png"))
+        self.epub_uploader = EpubUploader(self.gui, DATA_DIR)
+        upload_action = menu.addAction(
+            "Upload selected EPUB to Readwise Books…",
+            self.epub_uploader.upload_selected,
+        )
+        upload_action.setIcon(QIcon.ic("add_book.png"))
+        ebooks_action = menu.addAction(
+            "Show EPUBs in Readwise Books…", self.show_ebooks
+        )
+        ebooks_action.setIcon(QIcon.ic("books_in_series.png"))
         menu.addSeparator()
         settings_menu = menu.addMenu("Settings")
         settings_menu.setIcon(QIcon.ic("gear.png"))
@@ -389,9 +407,14 @@ class ReadwiseBooksAction(InterfaceAction):
         self.dialog.raise_()
         self.dialog.start_refresh()
 
+    def show_ebooks(self):
+        self.show_sessions()
+        if self.dialog is not None:
+            self.dialog.tabs.setCurrentWidget(self.dialog.ebooks)
+
 
 class SyncDialog(QDialog):
-    """One window for reading sessions and highlight delivery."""
+    """One window for reading sessions, highlight delivery and EPUB uploads."""
 
     def __init__(self, parent, action: ReadwiseBooksAction):
         super().__init__(parent)
@@ -402,7 +425,9 @@ class SyncDialog(QDialog):
         self.sessions = SessionsPanel(self.tabs, action)
         self.highlights = HighlightsPanel(self.tabs, action)
         self.tabs.addTab(self.sessions, "Sessions")
+        self.ebooks = EbooksPanel(self.tabs, action)
         self.tabs.addTab(self.highlights, "Highlights")
+        self.tabs.addTab(self.ebooks, "EPUBs")
         self.tabs.currentChanged.connect(lambda _index: self.refresh_current())
         layout.addWidget(self.tabs)
         close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
@@ -415,15 +440,12 @@ class SyncDialog(QDialog):
         self.refresh_timer.start(PREVIEW_POLL_MS)
 
     def refresh_current(self):
-        if self.tabs.currentIndex() == 0:
-            self.sessions.refresh()
-        else:
-            self.highlights.refresh()
+        self.tabs.currentWidget().refresh()
 
     def refresh_highlights_if_visible(self):
         if not self.isVisible():
             self.refresh_timer.stop()
-        elif self.tabs.currentIndex() == 1:
+        elif self.tabs.currentWidget() is self.highlights:
             self.highlights.refresh()
 
 
@@ -875,6 +897,244 @@ class SessionsPanel(SyncPanel):
         except (OSError, ValueError) as error:
             error_dialog(self, "Retry unavailable", str(error), show=True)
         self.refresh()
+
+
+class EbooksPanel(SyncPanel):
+    """The library's EPUBs and whether each is in the Readwise Books library.
+
+    Readwise's list (GET only, with the API token) is fetched when the tab is
+    first shown, on Refresh, and a while after each upload; the table is
+    rebuilt only then, not on every poll.
+    """
+
+    COLUMNS = ("Book", "Authors", "EPUB", "Readwise", "Matched by")
+    NOUN = "book"
+    FILTERS = ("All EPUBs", "Not in Readwise", "In Readwise")
+    RECHECK_MS = 45_000  # Readwise adds an upload about 30 s after it is sent
+
+    def __init__(self, parent, action: ReadwiseBooksAction):
+        super().__init__(parent, action)
+        self.remote: list[dict] | None = None
+        self.checked_at = ""
+        self.fetch_error = ""
+        self.fetcher: RemoteBooksWorker | None = None
+        self.remote_scope: str | None = None
+        self.fetch_scope: str | None = None
+        self.processing: set[int] = set()  # uploaded, not in Readwise's list yet
+        self.status_label = QLabel(self)
+        self.filter = QComboBox(self)
+        self.filter.addItems(self.FILTERS)
+        self.filter.currentIndexChanged.connect(lambda _index: self.reload())
+        refresh_button = QPushButton("Refresh from Readwise", self)
+        refresh_button.clicked.connect(self.fetch)
+        top = QHBoxLayout()
+        top.addWidget(self.status_label, 1)
+        top.addWidget(self.filter)
+        top.addWidget(refresh_button)
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.send_button)
+        buttons.addStretch()
+        layout = QVBoxLayout(self)
+        layout.addLayout(top)
+        layout.addWidget(self.table)
+        layout.addWidget(QLabel("Readwise Books entry:", self))
+        layout.addWidget(self.payload)
+        layout.addLayout(buttons)
+        self.send_all_button.hide()  # uploads go one book at a time
+        action.epub_uploader.listeners.append(self.upload_finished)
+
+    def row_key(self, row: dict) -> str | None:
+        return str(row["book"].calibre_id)
+
+    def refresh(self):
+        """Called on every poll: fetch once, otherwise leave the table be."""
+        self._ensure_scope()
+        if self.remote is None and self.fetcher is None and not self.fetch_error:
+            self.fetch()
+
+    def _scope(self) -> str:
+        return book_map_scope(
+            self.action.gui.current_db.library_id, prefs.get("token", "")
+        )
+
+    def _ensure_scope(self):
+        scope = self._scope()
+        if scope != self.remote_scope:
+            self.remote_scope = scope
+            self.remote = None
+            self.fetch_error = ""
+            self.checked_at = ""
+            self.processing.clear()
+
+    def fetch(self):
+        self._ensure_scope()
+        if self.fetcher is not None:
+            return
+        token = prefs.get("token", "")
+        if not token:
+            self.fetch_error = (
+                "Set a Readwise token to see which EPUBs are in Readwise."
+            )
+            self.reload()
+            return
+        self.fetch_error = ""
+        self.status_label.setText("Checking your Readwise Books library…")
+        self.fetch_scope = self.remote_scope
+        self.fetcher = RemoteBooksWorker(self, token)
+        self.fetcher.finished_fetch.connect(self.fetched)
+        self.fetcher.start()
+
+    def fetched(self, books, error):
+        self.fetcher = None
+        if self.fetch_scope != self._scope():
+            self._ensure_scope()
+            self.fetch()
+            return
+        if error is None:
+            self.remote = books
+            self.checked_at = time.strftime("%H:%M")
+        else:
+            self.fetch_error = error
+        self.reload()
+
+    def reload(self):
+        self._ensure_scope()
+        db = self.action.gui.current_db.new_api
+        books = [
+            calibre_book_from_db(db, book_id)
+            for book_id in db.all_book_ids()
+            if db.has_format(book_id, "EPUB")
+        ]
+        books.sort(key=lambda book: book.title.casefold())
+        try:
+            saved = read_book_map(DATA_DIR, self._scope())
+        except ValueError as error:
+            self.status_label.setText(str(error))
+            return
+        matches = plan_matches(books, self.remote or [], saved)
+        rows: list[dict[str, Any]] = []
+        for match in matches:
+            book_id = match.book.calibre_id
+            if self.remote is None:
+                status = "not checked"
+            else:
+                status = library_status(match)
+                if (
+                    status == LibraryStatus.NOT_IN_READWISE
+                    and book_id in self.processing
+                ):
+                    status = "uploaded · Readwise is adding it"
+                elif status != LibraryStatus.NOT_IN_READWISE:
+                    self.processing.discard(book_id)
+            rows.append({"book": match.book, "match": match, "status": status})
+        counts = {}
+        for row in rows:
+            counts[row["status"]] = counts.get(row["status"], 0) + 1
+        if self.fetch_error:
+            self.status_label.setText(self.fetch_error)
+        elif self.remote is not None:
+            summary = ", ".join(f"{n} {status}" for status, n in counts.items())
+            self.status_label.setText(
+                f"{len(rows)} EPUBs, checked against Readwise at {self.checked_at}: {summary}."
+            )
+        shown = self.filter.currentIndex()
+        if shown == 1:
+            rows = [r for r in rows if self.uploadable(r)]
+        elif shown == 2:
+            rows = [
+                r
+                for r in rows
+                if r["status"]
+                in (
+                    LibraryStatus.UPLOADED,
+                    LibraryStatus.IN_READWISE,
+                    LibraryStatus.LINKED,
+                )
+            ]
+        values = [
+            (
+                r["book"].title,
+                " & ".join(r["book"].authors),
+                _megabytes(db, r["book"].calibre_id),
+                r["status"],
+                r["match"].matched_by if r["match"].bookwise else "",
+            )
+            for r in rows
+        ]
+        self.fill_table(rows, values, select_first=False)
+
+    @staticmethod
+    def uploadable(row: dict) -> bool:
+        return row["status"] in (LibraryStatus.NOT_IN_READWISE, LibraryStatus.DELETED)
+
+    def show_payload(self):
+        selected = self.selected_rows()
+        busy = self.action.epub_uploader.busy
+        self.send_button.setEnabled(
+            len(selected) == 1 and self.uploadable(selected[0]) and not busy
+        )
+        self.send_button.setText(
+            "Uploading…" if busy else "Upload selected book to Readwise"
+        )
+        row = self.payload_row()
+        if row is None:
+            self.payload.setPlainText("Select a book to see its Readwise Books entry.")
+            return
+        remote = row["match"].bookwise
+        if not remote:
+            text = f"{row['status']}: no matching book in your Readwise Books library."
+        else:
+            product = remote.get("product") or {}
+            text = json.dumps(
+                {
+                    "status": str(row["status"]),
+                    "readwise_id": remote.get("id"),
+                    "title": remote.get("title"),
+                    "author": remote.get("author"),
+                    "shelf": remote.get("status"),
+                    "added_by": remote.get("creation_origin"),
+                    "matched_by": row["match"].matched_by,
+                    "isbn": product.get("isbn"),
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        if text != self.payload.toPlainText():
+            self.payload.setPlainText(text)
+
+    def send_selected(self):
+        selected = [row for row in self.selected_rows() if self.uploadable(row)]
+        if len(selected) != 1:
+            return
+        book = selected[0]["book"]
+        if selected[0]["status"] == LibraryStatus.DELETED and not question_dialog(
+            self,
+            "Upload again?",
+            f"{book.title} is in your Readwise Books library as deleted. Upload it again?",
+        ):
+            return
+        self.action.epub_uploader.upload_book(book.calibre_id, self)
+        self.show_payload()
+
+    def send_all(self):
+        pass  # hidden: uploads go one book at a time
+
+    def upload_finished(self, book_id: int, scope: str, error: Exception | None):
+        if scope != self._scope():
+            return
+        if error is None:
+            self.processing.add(book_id)
+            QTimer.singleShot(self.RECHECK_MS, self.fetch)
+            self.fetch()
+        self.reload()
+
+
+def _megabytes(db, book_id: int) -> str:
+    path = db.format_abspath(book_id, "EPUB")
+    try:
+        return f"{Path(path).stat().st_size / 1024 / 1024:.1f} MB"
+    except (OSError, TypeError):
+        return "?"
 
 
 def _plural(count: int, noun: str) -> str:

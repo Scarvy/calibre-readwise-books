@@ -1,6 +1,6 @@
 [project]
 name = "calibre-bookwise"
-version = "0.1.0"
+version = "0.2.0"
 description = "Record Calibre e-book viewer reading as Readwise Bookwise reading sessions"
 readme = "README.md"
 authors = [

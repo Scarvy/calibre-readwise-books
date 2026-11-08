@@ -40,9 +40,11 @@ class RateLimited(ReadwiseError):
 Fetch = Callable[[urllib.request.Request], tuple[int, dict, bytes]]
 
 
-def urlopen(request: urllib.request.Request) -> tuple[int, dict, bytes]:
+def urlopen(
+    request: urllib.request.Request, timeout: float = 30
+) -> tuple[int, dict, bytes]:
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, dict(response.headers), response.read()
     except urllib.error.HTTPError as error:
         return error.code, dict(error.headers or {}), error.read()
@@ -95,6 +97,10 @@ class ReadOnlyClient(ApiClient):
     def list_sessions(self) -> list[dict]:
         """Every reading session (not deleted)."""
         return self._get_all("sessions")
+
+    def list_uploads(self) -> list[dict]:
+        """Every upload returned by the Readwise Books uploads endpoint."""
+        return self._get_all("uploads")
 
     def _get_all(self, path: str) -> list[dict]:
         url = BASE_URL + path + "?" + urllib.parse.urlencode({"limit": PAGE_SIZE})

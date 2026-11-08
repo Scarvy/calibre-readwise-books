@@ -70,7 +70,7 @@ class MetadataSync:
             self.gui,
             "Readwise API token",
             "Paste your Readwise access token (readwise.io/access_token).\n"
-            "Used for metadata reads and optional session, highlight, and note uploads.",
+            "Used for metadata reads and optional session, highlight, note, and EPUB uploads.",
             QLineEdit.EchoMode.Password,
             prefs.get("token", ""),
         )

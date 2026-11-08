@@ -17,6 +17,7 @@ This repository builds a Calibre GUI plugin that records viewer sessions and opt
 - `src/calibre_bookwise/storage.py` and `locking.py`: atomic JSON writes, and releasing a sync lock around a network call.
 - `src/calibre_bookwise/diagnostics.py`: helpers for `scripts/` only; the build leaves it out of the plugin.
 - `src/calibre_bookwise/metadata.py`: custom column values.
+- `src/calibre_bookwise/ebook_upload.py` and `plugin/readwise_web.py`: upload one selected EPUB through the Readwise Books uploads API, and show which EPUBs are already in Readwise in the sync window; see `docs/ebook-upload.md`.
 - `scripts/build_plugin.py`: packages `plugin/` and all shared runtime modules from `src/calibre_bookwise/`. The default build is marked **DEV** and writes `dist/readwise-books-dev.zip`; `--release` writes the unmarked `dist/readwise-books.zip`. Keep diagnostic CLIs in `scripts/` so they are not installed with the plugin.
 - `logger/` and `scripts/report.py`, `scripts/match_report.py`, and `scripts/sync_dry_run.py`: standalone diagnostics, outside the installed plugin. Run them with `uv run python scripts/<name>.py`.
 
@@ -31,6 +32,7 @@ This repository builds a Calibre GUI plugin that records viewer sessions and opt
 - `sessions.jsonl` is the record of finished sessions: the tracker rebuilds `finished_until` from it on start, so a session is never finished, or queued, twice.
 - Highlight uploads are one way from Calibre to Readwise. Baseline existing annotations on first enable, retain upload state in `highlights.json`, and do not reset unreadable state: losing IDs can duplicate uploads. Validation errors require an explicit retry.
 - Saved book links are scoped by Calibre library ID and a hash of the Readwise token. Never reuse an unscoped numeric Calibre book ID from another library or account, or overwrite unreadable link state.
+- Ebook uploads use the API token and the documented start, PUT, complete, and status requests. A completion error leaves the outcome unknown: tell the user to check Readwise before starting another upload. The library's EPUB is uploaded as it is.
 - Metadata sync uses a GET only client and writes Calibre custom columns. It must not modify Readwise Books.
 
 ## Checks
