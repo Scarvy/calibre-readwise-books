@@ -1,4 +1,5 @@
 import json
+import os
 import zipfile
 
 import pytest
@@ -158,3 +159,14 @@ def test_missing_viewer_cache_falls_back_to_text(tmp_path, epub):
     assert book_progress(epub, "epubcfi(/4/2/4/2)", tmp_path / "none") == (
         pytest.approx(0.5)
     )
+
+
+def test_book_replaced_after_it_was_measured_gives_no_progress(epub, tmp_path):
+    cfi = "epubcfi(/4/2/4/2:10)"
+    assert book_progress(epub, cfi, cache_dir=tmp_path) is not None
+    stat = os.stat(epub)
+    with open(epub, "wb") as broken:
+        broken.write(b"not a zip")
+    os.utime(epub, ns=(stat.st_atime_ns, stat.st_mtime_ns))  # still cached
+
+    assert book_progress(epub, "epubcfi(/4/2/4/2:20)", cache_dir=tmp_path) is None

@@ -5,11 +5,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from calibre_bookwise.live import Tracker, ViewerState
+from calibre_bookwise.matching import LibraryBook
 
 T0 = datetime(2026, 10, 29, 15, 0, tzinfo=UTC)
 KEY = "d1aafe7b9f"
 OTHER = "05c6d07563"
-BOOK = {"book_id": 11, "title": "Design for Developers", "path": "/library/dfd.epub"}
+BOOK = LibraryBook(11, "Design for Developers", (), path="/library/dfd.epub")
 
 
 class Viewer:
@@ -55,9 +56,7 @@ def tracker(env, viewer=None, **kwargs):
     return Tracker(
         data,
         annots,
-        book_lookup=lambda key: (
-            BOOK if key == KEY else {"book_id": 4, "title": "Other"}
-        ),
+        book_lookup=lambda key: BOOK if key == KEY else LibraryBook(4, "Other", ()),
         progress_of=lambda path, cfi: 0.25 if cfi == "start" else 0.3,
         viewer_probe=viewer,
         clock=clock,
@@ -147,6 +146,37 @@ def test_restart_keeps_open_saves_and_does_not_requeue_finished(env):
     env[3].now = T0 + timedelta(minutes=20)
     assert [r["saves"] for r in restarted.poll()] == [2]
     assert len(restarted.finished_sessions()) == 2
+
+
+def test_crash_before_state_is_written_does_not_requeue_session(env):
+    t = tracker(env)
+    for second in (0, 30, 70):
+        read(env, second)
+        t.poll()
+    t.end_session()
+    t.state_path.unlink()  # Calibre died after the queue write, before state.json
+
+    restarted = tracker(env)
+    env[3].now = T0 + timedelta(minutes=20)
+
+    assert restarted.open_sessions() == []
+    assert restarted.poll() == []
+    assert len(restarted.finished_sessions()) == 1
+
+
+def test_line_cut_short_by_a_crash_is_skipped(env):
+    t = tracker(env)
+    read(env, 0)
+    t.poll()
+    with t.events_path.open("a") as log:
+        log.write('{"at": "2026-10-29T15:0')
+
+    restarted = tracker(env)
+    read(env, 30)
+    restarted.poll()
+
+    assert restarted.open_sessions()[0].saves == 2
+    assert tracker(env).open_sessions()[0].saves == 2
 
 
 def test_dwell_with_viewer_focused_stays_one_session(env):
@@ -270,3 +300,35 @@ def test_last_window_closing_ends_everything_without_a_recent_save(env):
     env[3].now = T0 + timedelta(seconds=90)  # no save in the last 8 seconds
 
     assert [r["saves"] for r in t.poll()] == [2]
+
+
+def test_finished_reading_is_dropped_from_memory_but_focus_carries_over(env):
+    focused = lambda: ViewerState(True, frozenset({1}), frozenset({1}))
+    t = tracker(env, viewer=focused)
+    for session in range(3):
+        base = session * 3600
+        for second in (0, 30, 60, 90):
+            read(env, base + second)
+            t.poll()
+        t.end_session()
+    assert len(t.finished_sessions()) == 3
+    assert not any(e.get("event") == "position_saved" for e in t.events)
+    assert sum(e.get("event") == "focus_changed" for e in t.events) == 1
+
+    # A slow page straight after the prune still counts as a focused dwell.
+    for second in (4 * 3600, 4 * 3600 + 20, 4 * 3600 + 20 + 7 * 60):
+        read(env, second)
+        t.poll()
+    [session] = t.open_sessions()
+    assert session.saves == 3
+    assert len(tracker(env).finished_sessions()) == 3
+
+
+def test_finished_sessions_come_from_memory_after_start(env):
+    t = tracker(env)
+    read(env, 0)
+    t.poll()
+    [record] = t.end_session()
+    t.sessions_path.unlink()  # not read again while running
+
+    assert t.finished_sessions() == [record]

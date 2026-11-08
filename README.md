@@ -15,11 +15,13 @@ A Calibre plugin that records reading sessions in the e-book viewer and syncs se
 
 Download [readwise-books.zip](https://github.com/Scarvy/calibre-readwise-books/releases/latest/download/readwise-books.zip). In Calibre, choose **Preferences → Plugins → Load plugin from file**, select the zip, and restart Calibre.
 
-To build the zip from source instead:
+To build from source instead:
 
 ```sh
 uv run python scripts/build_plugin.py
 ```
+
+This creates `dist/readwise-books-dev.zip`. After installing it, the toolbar and menu show **DEV** so you can tell it apart from a downloaded release. A release package is built with `uv run python scripts/build_plugin.py --release`.
 
 Add **Readwise Books** to a Calibre toolbar if it is not visible. To sync with Readwise, set your [access token](https://readwise.io/access_token) under **Readwise Books → Settings → Set Readwise token…**.
 

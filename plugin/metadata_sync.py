@@ -5,12 +5,22 @@ writes are to this Calibre library's custom columns. The first run offers to
 create the columns, which Calibre needs a restart to show.
 """
 
-import json
+import traceback
 from pathlib import Path
 
 from calibre.gui2 import error_dialog, info_dialog, question_dialog
 from calibre.utils.config import JSONConfig
-from calibre_plugins.readwise_books.matching import CalibreBook, plan_matches
+from calibre_plugins.readwise_books.book_map import (
+    book_map_scope,
+    definite_links,
+    read_book_map,
+    remember,
+)
+from calibre_plugins.readwise_books.matching import (
+    CalibreBook,
+    calibre_book_from_db,
+    plan_matches,
+)
 from calibre_plugins.readwise_books.metadata import (
     COLUMNS,
     NOT_IN_READWISE,
@@ -43,12 +53,16 @@ class SyncWorker(QThread):
             self.finished_sync.emit(matches, column_updates(matches, sessions))
         except ReadwiseError as error:
             self.finished_sync.emit(None, str(error))
+        # Always report back, or the status bar says "syncing" forever.
+        except Exception as error:  # noqa: BLE001
+            traceback.print_exc()
+            self.finished_sync.emit(None, f"Unexpected error: {error}")
 
 
 class MetadataSync:
     def __init__(self, gui, data_dir: Path):
         self.gui = gui
-        self.book_map_path = data_dir / "book_map.json"
+        self.data_dir = data_dir
         self.worker = None
 
     def set_token(self) -> bool:
@@ -73,8 +87,17 @@ class MetadataSync:
         if not self.ensure_columns():
             return
         db = self.gui.current_db.new_api
-        books = [_calibre_book(db, book_id) for book_id in db.all_book_ids()]
-        self.worker = SyncWorker(self.gui, prefs["token"], books, self._saved())
+        books = [calibre_book_from_db(db, book_id) for book_id in db.all_book_ids()]
+        scope = book_map_scope(self.gui.current_db.library_id, prefs["token"])
+        try:
+            saved = read_book_map(self.data_dir, scope)
+        except ValueError as error:
+            error_dialog(
+                self.gui, "Readwise book links unavailable", str(error), show=True
+            )
+            return
+        self.worker_scope = scope
+        self.worker = SyncWorker(self.gui, prefs["token"], books, saved)
         self.worker.finished_sync.connect(self.apply)
         self.gui.status_bar.show_message("Readwise Books: syncing metadata…", 0)
         self.worker.start()
@@ -116,6 +139,10 @@ class MetadataSync:
         if matches is None:
             error_dialog(self.gui, "Readwise sync failed", updates, show=True)
             return
+        if self.worker_scope != book_map_scope(
+            self.gui.current_db.library_id, prefs.get("token", "")
+        ):
+            return  # the library or Readwise account changed while fetching
         db = self.gui.current_db.new_api
         selected = self.gui.current_view().get_selected_ids()
         selected_id = next(iter(selected)) if len(selected) == 1 else None
@@ -127,7 +154,7 @@ class MetadataSync:
         for label, values in updates.items():
             db.set_field(f"#{label}", values)
         self.gui.library_view.model().refresh_ids(list(updates["rw_status"]))
-        self._save(matches)
+        remember(self.data_dir, self.worker_scope, definite_links(matches))
         in_readwise = sum(
             1 for v in updates["rw_status"].values() if v != NOT_IN_READWISE
         )
@@ -197,31 +224,3 @@ class MetadataSync:
                 book_id, "EPUB", open_at=position
             )
         return True
-
-    def _saved(self) -> dict[int, int]:
-        try:
-            return {
-                int(k): v for k, v in json.loads(self.book_map_path.read_text()).items()
-            }
-        except (OSError, ValueError):
-            return {}
-
-    def _save(self, matches):
-        """Remember ISBN/ASIN matches; title matches are re-checked each sync."""
-        saved = self._saved()
-        for match in matches:
-            if match.matched_by in ("isbn", "asin"):
-                saved[match.book.calibre_id] = match.bookwise_id
-        self.book_map_path.parent.mkdir(parents=True, exist_ok=True)
-        self.book_map_path.write_text(json.dumps(saved, indent=2, sort_keys=True))
-
-
-def _calibre_book(db, book_id: int) -> CalibreBook:
-    identifiers = db.field_for("identifiers", book_id) or {}
-    return CalibreBook(
-        calibre_id=book_id,
-        title=db.field_for("title", book_id),
-        authors=tuple(db.field_for("authors", book_id) or ()),
-        isbn=identifiers.get("isbn"),
-        asin=identifiers.get("amazon") or identifiers.get("mobi-asin"),
-    )

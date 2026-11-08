@@ -62,7 +62,7 @@ def column_updates(
             by_book.setdefault(session["book_id"], []).append(session)
     updates: dict[str, dict[int, object]] = {column.label: {} for column in COLUMNS}
     for match in matches:
-        values = book_values(match, by_book.get(match.bookwise_id or -1, []))
+        values = book_values(match, by_book.get(match.bookwise_id, []))
         for label, value in values.items():
             updates[label][match.book.calibre_id] = value
     return updates

@@ -23,7 +23,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .bookwise import skip_reason
+from .bookwise import SessionStatus, skip_reason
+from .matching import LibraryBook
 from .sessions import (
     DEFAULT_DWELL_LIMIT,
     DEFAULT_IDLE_LIMIT,
@@ -32,6 +33,7 @@ from .sessions import (
     focus_from_events,
     saves_from_events,
 )
+from .storage import atomic_write_json
 
 # Viewer opened from the Calibre app, and from the command line (macOS).
 VIEWER_EXECUTABLE_SUFFIXES = (
@@ -53,7 +55,7 @@ class ViewerState:
     existing: frozenset[int] = field(default_factory=frozenset)
 
 
-BookLookup = Callable[[str], dict | None]  # annots key -> {book_id, title, path}
+BookLookup = Callable[[str], LibraryBook | None]  # annots key -> the book file
 ProgressOf = Callable[[str | None, str | None], float | None]  # (path, cfi) -> 0-1
 ViewerProbe = Callable[[], ViewerState | None]  # None = unknown (e.g. not macOS)
 
@@ -93,6 +95,16 @@ class Tracker:
         self.finished_until: dict[str, str] = self._read_state().get(
             "finished_until", {}
         )
+        # sessions.jsonl is written before state.json, so after a crash between
+        # the two it knows of sessions the state lacks; never finish them twice.
+        # Finished sessions, oldest first; sessions.jsonl is only appended to.
+        self.finished = _read_jsonl(self.sessions_path)
+        for record in self.finished:
+            done = self.finished_until.get(record["book_key"])
+            end = datetime.fromisoformat(record["end"])
+            if done is None or end > datetime.fromisoformat(done):
+                self.finished_until[record["book_key"]] = record["end"]
+        self._forget_finished()
         # poll() runs on a background thread in the plugin; the UI reads too.
         self.lock = threading.RLock()
         self.focused: bool | None = None
@@ -143,7 +155,7 @@ class Tracker:
 
     def finished_sessions(self) -> list[dict]:
         with self.lock:
-            return _read_jsonl(self.sessions_path)
+            return list(self.finished)
 
     def _sessions(self) -> list[Session]:
         by_book: dict[str, list] = {}
@@ -216,11 +228,56 @@ class Tracker:
             record = _session_record(session, now)
             with self.sessions_path.open("a") as queue:
                 queue.write(json.dumps(record) + "\n")
+            self.finished.append(record)
             self.finished_until[session.book_key] = session.end.isoformat()
             finished.append(record)
         if finished:
             self._write_state()
+            self._forget_finished()
         return finished
+
+    def _forget_finished(self):
+        """Keep in memory only events that can still change an open session.
+
+        Every poll rebuilds sessions from self.events, so without this the
+        work grows with all reading ever done. events.jsonl keeps it all.
+        What an open session can still use: its saves, the ends and focus
+        changes since the earliest of them, and the focus state at that time.
+        """
+        open_saves = [
+            event
+            for event in self.events
+            if event.get("event") == "position_saved"
+            and event.get("viewer_timestamp")
+            and not self._is_finished(event["key"], event["viewer_timestamp"])
+        ]
+        start = min(
+            (datetime.fromisoformat(e["viewer_timestamp"]) for e in open_saves),
+            default=None,
+        )
+        kept = [id(event) for event in open_saves]
+        focus_before = None
+        for event in self.events:
+            kind = event.get("event")
+            if kind not in ("focus_changed", "session_ended"):
+                continue
+            at = datetime.fromisoformat(event["at"])
+            if start is not None and at >= start:
+                kept.append(id(event))
+            elif kind == "focus_changed" and (
+                focus_before is None or at >= datetime.fromisoformat(focus_before["at"])
+            ):
+                focus_before = event
+        if focus_before is not None:
+            kept.append(id(focus_before))
+        keep = set(kept)
+        self.events = [event for event in self.events if id(event) in keep]
+
+    def _is_finished(self, key: str, timestamp: str) -> bool:
+        done = self.finished_until.get(key)
+        return done is not None and datetime.fromisoformat(
+            timestamp
+        ) <= datetime.fromisoformat(done)
 
     def _record_save(self, annots_file: Path, now: datetime):
         key = annots_file.stem
@@ -229,17 +286,17 @@ class Tracker:
         if not timestamp or timestamp == self.positions.get(key):
             return  # a highlight change, not a new position
         self.positions[key] = timestamp
-        book = self.book_lookup(key) or {}
+        book = self.book_lookup(key)
         self._append_event(
             {
                 "at": now.isoformat(),
                 "event": "position_saved",
                 "key": key,
-                "book_id": book.get("book_id"),
-                "title": book.get("title"),
+                "book_id": book.calibre_id if book else None,
+                "title": book.title if book else None,
                 "pos": position.get("pos"),
                 "viewer_timestamp": timestamp,
-                "path": book.get("path"),
+                "path": book.path if book else None,
             }
         )
 
@@ -266,9 +323,7 @@ class Tracker:
             return {}
 
     def _write_state(self):
-        temporary = self.state_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps({"finished_until": self.finished_until}))
-        temporary.replace(self.state_path)
+        atomic_write_json(self.state_path, {"finished_until": self.finished_until})
 
 
 def _remembered(progress_of: ProgressOf) -> ProgressOf:
@@ -308,7 +363,7 @@ def _session_record(session: Session, now: datetime) -> dict:
         finished_at=now.isoformat(),
     )
     reason = skip_reason(session)
-    record["status"] = "skipped" if reason else "pending"
+    record["status"] = SessionStatus.SKIPPED if reason else SessionStatus.PENDING
     record["skip_reason"] = reason
     return record
 
@@ -325,11 +380,25 @@ def _last_read(annots_file: Path) -> dict:
 
 
 def _read_jsonl(path: Path) -> list[dict]:
+    """Records in an append-only log, skipping a line cut short by a crash."""
     try:
         with path.open() as lines:
-            return [json.loads(line) for line in lines if line.strip()]
+            text = list(lines)
     except OSError:
         return []
+    records = []
+    for number, line in enumerate(text, 1):
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except ValueError:
+            print(f"Readwise Books: skipping unreadable line {number} of {path}")
+    if text and not text[-1].endswith("\n"):
+        # Start the next append on its own line, not glued to the broken one.
+        with path.open("a") as log:
+            log.write("\n")
+    return records
 
 
 def _run(args: list[str]) -> str:

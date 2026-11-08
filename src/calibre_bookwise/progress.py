@@ -164,11 +164,16 @@ def chars_before(document: Node, steps: tuple[int, ...], offset: int) -> int:
 
 
 class Book:
-    """An EPUB's spine with the text length of each chapter."""
+    """An EPUB's spine with the text length of each chapter.
+
+    Only the lengths are kept: a position's own chapter is parsed again when
+    asked, so caching many books costs little memory.
+    """
 
     def __init__(self, epub_path: str):
-        self.chapters: list[Node] = []
+        self.epub_path = epub_path
         self.names: list[str | None] = []  # chapter file paths inside the EPUB
+        self.lengths: list[int] = []
         with zipfile.ZipFile(epub_path) as epub:
             container = ElementTree.fromstring(epub.read("META-INF/container.xml"))
             rootfile_el = container.find(".//{*}rootfile")
@@ -183,15 +188,15 @@ class Book:
             opf_dir = posixpath.dirname(opf_path)
             for itemref in opf.findall(".//{*}spine/{*}itemref"):
                 href = hrefs.get(itemref.get("idref"))
-                if href is None:
-                    self.chapters.append(Node("#missing"))
-                    self.names.append(None)
-                    continue
-                name = posixpath.normpath(posixpath.join(opf_dir, href))
-                markup = epub.read(name).decode("utf-8", errors="replace")
-                self.chapters.append(parse_document(markup))
+                name = (
+                    posixpath.normpath(posixpath.join(opf_dir, href)) if href else None
+                )
                 self.names.append(name)
-        self.lengths = [text_length(chapter) for chapter in self.chapters]
+                self.lengths.append(text_length(_chapter(epub, name)))
+
+    def chapter(self, index: int) -> Node:
+        with zipfile.ZipFile(self.epub_path) as epub:
+            return _chapter(epub, self.names[index])
 
     def progress(
         self, position: Position, weights: list[int] | None = None
@@ -199,14 +204,20 @@ class Book:
         """weights: per-chapter lengths to use instead of text lengths."""
         index = position.spine_index
         weights = weights or self.lengths
-        if not 0 <= index < len(self.chapters) or not sum(weights):
+        if not 0 <= index < len(self.names) or not sum(weights):
             return None
         within = 0.0
         if self.lengths[index]:
-            chars = chars_before(self.chapters[index], position.steps, position.offset)
+            chars = chars_before(self.chapter(index), position.steps, position.offset)
             within = chars / self.lengths[index]
         before = sum(weights[:index])
         return min((before + within * weights[index]) / sum(weights), 1.0)
+
+
+def _chapter(epub: zipfile.ZipFile, name: str | None) -> Node:
+    if name is None:
+        return Node("#missing")
+    return parse_document(epub.read(name).decode("utf-8", errors="replace"))
 
 
 def viewer_lengths(
@@ -245,23 +256,29 @@ def _load_book(epub_path: str, mtime: float) -> Book | None:
         return None
 
 
-def book_progress(
-    epub_path: str | None, cfi: str | None, cache_dir: Path = VIEWER_CACHE
-) -> float | None:
-    """Fraction of the book before the saved position, or None."""
-    if not epub_path or not cfi or not epub_path.lower().endswith(".epub"):
-        return None
-    position = parse_cfi(cfi)
-    if position is None:
+def _epub(epub_path: str | None) -> Book | None:
+    """The parsed EPUB at this path, reloaded only when the file changes."""
+    if not epub_path or not epub_path.lower().endswith(".epub"):
         return None
     try:
         mtime = Path(epub_path).stat().st_mtime
     except OSError:
         return None
-    book = _load_book(epub_path, mtime)
-    if book is None:
+    return _load_book(epub_path, mtime)
+
+
+def book_progress(
+    epub_path: str | None, cfi: str | None, cache_dir: Path = VIEWER_CACHE
+) -> float | None:
+    """Fraction of the book before the saved position, or None."""
+    position = parse_cfi(cfi) if cfi else None
+    book = _epub(epub_path) if position else None
+    if book is None or position is None or epub_path is None:
         return None
-    return book.progress(position, viewer_lengths(epub_path, book.names, cache_dir))
+    try:
+        return book.progress(position, viewer_lengths(epub_path, book.names, cache_dir))
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None  # the file changed or vanished since it was measured
 
 
 def viewer_position_at_progress(
@@ -272,18 +289,8 @@ def viewer_position_at_progress(
     The viewer measures positions in thousands of characters. Its cached
     chapter lengths give the closest match to its own percentage display.
     """
-    if (
-        not epub_path
-        or not epub_path.lower().endswith(".epub")
-        or not 0 <= progress <= 100
-    ):
-        return None
-    try:
-        mtime = Path(epub_path).stat().st_mtime
-    except OSError:
-        return None
-    book = _load_book(epub_path, mtime)
-    if book is None:
+    book = _epub(epub_path) if 0 <= progress <= 100 else None
+    if book is None or epub_path is None:
         return None
     lengths = viewer_lengths(epub_path, book.names, cache_dir) or book.lengths
     total = sum(lengths)

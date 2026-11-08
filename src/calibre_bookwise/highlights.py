@@ -8,50 +8,64 @@ Only this module's uploaded highlights can have their notes updated; no deletes.
 import json
 import threading
 import time
-import urllib.request
+from collections import Counter
+from collections.abc import Mapping
+from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
-from .readwise_api import Fetch, ReadwiseError, _urlopen
+from .locking import unlocked
+from .matching import CalibreBook
+from .readwise_api import ApiClient, RateLimited, ReadwiseError
+from .storage import atomic_write_json
 
 HIGHLIGHTS_URL = "https://readwise.io/api/v2/highlights/"
 SETTLE_SECONDS = 5
+
+
+class HighlightStatus(StrEnum):
+    """Where one Calibre highlight is on its way to Readwise."""
+
+    UNAVAILABLE = "unavailable"  # Calibre saved no annotation id
+    LOCAL = "local"  # not queued: existed before sync was enabled
+    PENDING = "pending"  # queued to send (or to update its note)
+    UPLOADED = "uploaded"
+    REMOVED = "removed locally"  # deleted in Calibre; kept in Readwise
+    INVALID = "invalid"  # over Readwise's limits; waits for an edit
+    REJECTED = "rejected"  # Readwise refused it; retry only by hand
+
+
+class Waiting(StrEnum):
+    """Why a pending highlight has not been sent yet, for the status column."""
+
+    RETRY = "retry"  # the last attempt failed and will be repeated
+    TOKEN = "token needed"
+    PAUSED = "paused"  # automatic upload is off and it wasn't sent by hand
+    SETTLING = "settling"  # the viewer may still be saving it
+
+
+class Explanation(NamedTuple):
+    message: str  # for the user
+    waiting: Waiting | None = None
 
 
 class HighlightSender(Protocol):
     def send(self, payload: dict, remote_id: int | None = None) -> int: ...
 
 
-class HighlightClient:
+class HighlightClient(ApiClient):
     """Separate from the deliberately GET-only metadata client. No DELETE method."""
 
-    def __init__(self, token: str, fetch: Fetch = _urlopen):
-        self.token = token.strip()
-        self.fetch = fetch
+    _retry_default = 60.0
 
     def send(self, payload: dict, remote_id: int | None = None) -> int:
         method, url, data = highlight_request(payload, remote_id)
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(data).encode(),
-            method=method,
-            headers={
-                "Authorization": f"Token {self.token}",
-                "Content-Type": "application/json",
-            },
-        )
-        status, headers, body = self.fetch(request)
-        if status == 429:
-            try:
-                delay = max(1, float(headers.get("Retry-After", 60)))
-            except ValueError:
-                delay = 60
-            raise RateLimited(delay)
-        if status != 200:
-            message = _highlight_error(status, body)
-            if status in (400, 422):
-                raise HighlightRejected(message)
-            raise ReadwiseError(message)
+        try:
+            body = self._request(method, url, data)
+        except ReadwiseError as error:
+            if error.status in (400, 422):
+                raise HighlightRejected(str(error), error.status) from error
+            raise
         if remote_id is not None:
             return remote_id
         books = json.loads(body)
@@ -64,29 +78,18 @@ class HighlightClient:
         return ids[0]
 
 
-class RateLimited(ReadwiseError):
-    def __init__(self, delay: float):
-        super().__init__("Readwise rate limit; upload will retry later.")
-        self.delay = delay
-
-
 class HighlightRejected(ReadwiseError):
     """Readwise rejected this payload; repeating it unchanged will not help."""
 
 
-def _highlight_error(status: int, body: bytes) -> str:
-    try:
-        details = json.loads(body)
-    except (ValueError, UnicodeDecodeError):
-        details = body.decode("utf-8", "replace").strip()
-    if isinstance(details, dict):
-        details = details.get("detail") or details.get("error") or details
-    if isinstance(details, (dict, list)):
-        details = json.dumps(details, ensure_ascii=False)
-    detail = str(details).strip()[:500]
-    return f"Readwise highlight upload failed (HTTP {status})" + (
-        f": {detail}" if detail else "."
-    )
+def highlight_key(book_key: str, uuid: str) -> str:
+    """Sync state key for one annotation: annots file key, then Calibre's uuid."""
+    return f"{book_key}:{uuid}"
+
+
+def book_key_of(key: str) -> str:
+    """The annots file key a highlight_key belongs to."""
+    return key.split(":", 1)[0]
 
 
 def highlight_request(
@@ -108,11 +111,11 @@ def read_annotations(path: Path) -> list[dict]:
     return value
 
 
-def highlight_payload(annotation: dict, book: dict) -> dict:
+def highlight_payload(annotation: dict, book: CalibreBook) -> dict:
     text = annotation.get("highlighted_text") or ""
     note = annotation.get("notes") or ""
-    title = book.get("title") or ""
-    author = ", ".join(book.get("authors") or ())
+    title = book.title or ""
+    author = ", ".join(book.authors)
     for name, value, limit in (
         ("text", text, 8191),
         ("note", note, 8191),
@@ -138,7 +141,7 @@ def highlight_payload(annotation: dict, book: dict) -> dict:
 
 
 def preview_highlights(
-    annots_dir: Path, books: dict[str, dict]
+    annots_dir: Path, books: Mapping[str, CalibreBook]
 ) -> tuple[list[dict], list[str]]:
     """Build create requests from saved annotations without changing sync state."""
     previews = []
@@ -150,7 +153,7 @@ def preview_highlights(
         try:
             annotations = read_annotations(path)
         except (OSError, ValueError) as error:
-            errors.append(f"{book.get('title') or path.name}: {error}")
+            errors.append(f"{book.title or path.name}: {error}")
             continue
         for annotation in annotations:
             if annotation.get("type") != "highlight" or annotation.get("removed"):
@@ -158,15 +161,15 @@ def preview_highlights(
             try:
                 payload = highlight_payload(annotation, book)
             except ValueError as error:
-                errors.append(f"{book.get('title') or path.name}: {error}")
+                errors.append(f"{book.title or path.name}: {error}")
                 continue
             method, url, body = highlight_request(payload)
             previews.append(
                 {
-                    "key": f"{path.stem}:{annotation['uuid']}"
+                    "key": highlight_key(path.stem, annotation["uuid"])
                     if annotation.get("uuid")
                     else None,
-                    "book": book.get("title") or "",
+                    "book": book.title or "",
                     "timestamp": annotation.get("timestamp") or "",
                     "text": payload["text"],
                     "note": payload["note"],
@@ -178,6 +181,37 @@ def preview_highlights(
             )
     previews.sort(key=lambda item: str(item["timestamp"]), reverse=True)
     return previews, errors
+
+
+class PreviewCache:
+    """preview_highlights for a window that refreshes every half second.
+
+    Re-reads the annotation files only when one changes or the library does.
+    Callers may add fields to the returned previews but not change payloads.
+    """
+
+    def __init__(self, annots_dir: Path):
+        self.annots_dir = annots_dir
+        self._stamp: object = None
+        self._books: Mapping[str, CalibreBook] | None = None
+        self._result: tuple[list[dict], list[str]] = ([], [])
+
+    def get(self, books: Mapping[str, CalibreBook]) -> tuple[list[dict], list[str]]:
+        stamp = self._files_stamp()
+        if stamp is None or stamp != self._stamp or books is not self._books:
+            self._result = preview_highlights(self.annots_dir, books)
+            self._stamp, self._books = stamp, books
+        return self._result
+
+    def _files_stamp(self) -> tuple | None:
+        files = []
+        try:
+            for path in self.annots_dir.glob("*.json"):
+                stat = path.stat()
+                files.append((path.name, stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            return None  # a file vanished mid-scan: just read them again
+        return tuple(sorted(files))
 
 
 class HighlightSync:
@@ -208,10 +242,20 @@ class HighlightSync:
             raise ValueError("Invalid highlight sync state; restore from backup.")
 
     def _save(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(self.state, indent=2))
-        temporary.replace(self.path)
+        atomic_write_json(self.path, self.state, indent=2)
+
+    @property
+    def enabled(self) -> bool:
+        """Whether new highlights are uploaded automatically."""
+        with self.lock:
+            return self.state["enabled"]
+
+    def summary(self) -> tuple[dict[str, int], list[str]]:
+        """How many highlights are in each status, and the distinct errors."""
+        with self.lock:
+            items = list(self.state["items"].values())
+        counts = Counter(item["status"] for item in items)
+        return counts, sorted({item["error"] for item in items if item.get("error")})
 
     def set_enabled(self, enabled: bool):
         with self.lock:
@@ -221,54 +265,55 @@ class HighlightSync:
                 for path in self.annots_dir.glob("*.json"):
                     for a in read_annotations(path):
                         if a.get("type") == "highlight" and a.get("uuid"):
-                            seen.add(f"{path.stem}:{a['uuid']}")
+                            seen.add(highlight_key(path.stem, a["uuid"]))
                 self.state["seen"] = sorted(seen)
             self.state["enabled"] = enabled
             self._save()
 
     def status(self, key: str | None) -> str:
         if key is None:
-            return "unavailable"
+            return HighlightStatus.UNAVAILABLE
         with self.lock:
-            return self.state["items"].get(key, {}).get("status", "local")
+            return self.state["items"].get(key, {}).get("status", HighlightStatus.LOCAL)
 
-    def entry(self, key: str | None) -> dict:
-        if key is None:
-            return {}
-        with self.lock:
-            return self.state["items"].get(key, {}).copy()
-
-    def explanation(self, key: str | None, token_available: bool) -> str:
+    def explanation(self, key: str | None, token_available: bool) -> Explanation:
         """Why this highlight is waiting, or why Readwise rejected it."""
         if key is None:
-            return "Calibre did not save an annotation ID for this highlight."
+            return Explanation(
+                "Calibre did not save an annotation ID for this highlight."
+            )
         with self.lock:
             item = self.state["items"].get(key)
             if item is None:
-                return "Saved locally. Select it to upload."
+                return Explanation("Saved locally. Select it to upload.")
+            pending = item.get("status") == HighlightStatus.PENDING
             if item.get("error"):
-                return item["error"]
-            if item.get("status") != "pending":
-                return ""
+                return Explanation(item["error"], Waiting.RETRY if pending else None)
+            if not pending:
+                return Explanation("")
             if not token_available:
-                return "Waiting for a Readwise token."
+                return Explanation("Waiting for a Readwise token.", Waiting.TOKEN)
             if not self.state["enabled"] and not item.get("manual"):
-                return "Automatic upload is paused."
+                return Explanation("Automatic upload is paused.", Waiting.PAUSED)
             if self.clock() < item.get("ready_at", 0):
-                return "Waiting for the highlight to finish saving."
+                return Explanation(
+                    "Waiting for the highlight to finish saving.", Waiting.SETTLING
+                )
             if self.clock() < self.state.get("retry_at", 0):
-                return "Waiting for the next retry."
-            return "Queued for the next upload attempt."
+                return Explanation("Waiting for the next retry.", Waiting.RETRY)
+            return Explanation("Queued for the next upload attempt.")
 
-    def queue_saved(self, keys: list[str], books: dict[str, dict]):
+    def queue_saved(self, keys: list[str], books: Mapping[str, CalibreBook]):
         """Queue chosen older highlights, including while automatic upload is off."""
-        self._queue_saved(keys, books, "local")
+        self._queue_saved(keys, books, HighlightStatus.LOCAL)
 
-    def retry_rejected(self, keys: list[str], books: dict[str, dict]):
+    def retry_rejected(self, keys: list[str], books: Mapping[str, CalibreBook]):
         """Explicitly retry rejected highlights after inspecting the error."""
-        self._queue_saved(keys, books, "rejected")
+        self._queue_saved(keys, books, HighlightStatus.REJECTED)
 
-    def _queue_saved(self, keys: list[str], books: dict[str, dict], expected: str):
+    def _queue_saved(
+        self, keys: list[str], books: Mapping[str, CalibreBook], expected: str
+    ):
         with self.lock:
             previews, _errors = preview_highlights(self.annots_dir, books)
             available = {p["key"]: p for p in previews if p["key"] is not None}
@@ -283,7 +328,7 @@ class HighlightSync:
             for key in keys:
                 self.state["items"][key] = {
                     "payload": available[key]["payload"],
-                    "status": "pending",
+                    "status": HighlightStatus.PENDING,
                     "ready_at": now,
                     "manual": True,
                     "error": "",
@@ -292,7 +337,7 @@ class HighlightSync:
             self.state["seen"] = sorted(seen)
             self._save()
 
-    def poll(self, books: dict[str, dict], client: HighlightSender | None):
+    def poll(self, books: Mapping[str, CalibreBook], client: HighlightSender | None):
         with self.lock:
             now = self.clock()
             seen = set(self.state["seen"])
@@ -309,33 +354,33 @@ class HighlightSync:
                 for a in annotations:
                     if a.get("type") != "highlight" or not a.get("uuid"):
                         continue
-                    key = f"{path.stem}:{a['uuid']}"
+                    key = highlight_key(path.stem, a["uuid"])
                     item = items.get(key)
                     if key in seen and item is None:
                         continue  # pre-existing highlight, including edits to it
                     seen.add(key)
                     if a.get("removed"):
                         if item:
-                            item["status"] = "removed locally"
+                            item["status"] = HighlightStatus.REMOVED
                         continue
                     try:
                         payload = highlight_payload(a, book)
                     except ValueError as error:
                         items[key] = {
                             **(item or {}),
-                            "status": "invalid",
+                            "status": HighlightStatus.INVALID,
                             "error": str(error),
                         }
                         continue
                     if (
                         item is None
                         or item.get("payload") != payload
-                        or item.get("status") == "invalid"
+                        or item.get("status") == HighlightStatus.INVALID
                     ):
                         items[key] = {
                             **(item or {}),
                             "payload": payload,
-                            "status": "pending",
+                            "status": HighlightStatus.PENDING,
                             "ready_at": now + SETTLE_SECONDS,
                             "error": "",
                         }
@@ -347,38 +392,41 @@ class HighlightSync:
             # One request per poll: no sleeps or unbounded background request loops.
             for key, item in items.items():
                 if (
-                    item["status"] != "pending"
+                    item["status"] != HighlightStatus.PENDING
                     or now < item["ready_at"]
                     or (not self.state["enabled"] and not item.get("manual"))
                 ):
                     continue
                 # Don't upload queued books from a different active library.
-                if key.split(":", 1)[0] not in books:
+                if book_key_of(key) not in books:
                     continue
+                remote_id = item.get("remote_id")
+                if remote_id is not None:
+                    if item["payload"]["note"] == item.get("sent_note"):
+                        item["status"] = HighlightStatus.UPLOADED
+                        continue
+                    payload = {"note": item["payload"]["note"]}
+                else:
+                    payload = item["payload"]
                 try:
-                    remote_id = item.get("remote_id")
-                    if remote_id is not None:
-                        if item["payload"]["note"] == item.get("sent_note"):
-                            item["status"] = "uploaded"
-                            continue
-                        payload = {"note": item["payload"]["note"]}
-                    else:
-                        payload = item["payload"]
-                    self.lock.release()
-                    try:
+                    with unlocked(self.lock):
                         uploaded_id = client.send(payload, remote_id)
-                    finally:
-                        self.lock.acquire()
-                    item["remote_id"] = uploaded_id
-                    item["sent_note"] = payload.get("note", "")
-                    item["status"] = "uploaded"
-                    item["error"] = ""
                 except (OSError, ValueError, ReadwiseError) as error:
                     item["error"] = str(error)
                     if isinstance(error, HighlightRejected):
-                        item["status"] = "rejected"
+                        item["status"] = HighlightStatus.REJECTED
                     else:
                         delay = error.delay if isinstance(error, RateLimited) else 60
                         self.state["retry_at"] = now + delay
+                else:
+                    # Another poll may have replaced the item (a note edited
+                    # mid-request). Keep the id on whatever is there now, or
+                    # the next poll would create the highlight a second time.
+                    current = items.setdefault(key, item)
+                    current["remote_id"] = uploaded_id
+                    current["sent_note"] = payload.get("note", "")
+                    if current is item:
+                        item.update(status=HighlightStatus.UPLOADED, error="")
+                    # else it stays pending; the next poll sends any new note.
                 self._save()
                 break

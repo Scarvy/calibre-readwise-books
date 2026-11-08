@@ -6,6 +6,7 @@ format "ebook", and start/end positions as fractions of the book (0-1).
 
 import os
 from datetime import UTC, timedelta
+from enum import StrEnum
 
 from .sessions import Session
 
@@ -13,7 +14,17 @@ from .sessions import Session
 MIN_DURATION = timedelta(minutes=1)
 # The API rejects sessions where ended_at is more than 24h after started_at.
 MAX_DURATION = timedelta(hours=24)
-BATCH_SIZE = 10  # the API takes at most 10 sessions per request
+
+
+class SessionStatus(StrEnum):
+    """Where a finished session is on its way to Readwise."""
+
+    SKIPPED = "skipped"  # too short or no position: never sent
+    LOCAL = "local"  # kept on this computer unless sent manually
+    PENDING = "pending"  # queued to send
+    SENDING = "sending"  # POST in flight; persisted so a crash can't resend
+    UPLOADED = "uploaded"
+    NEEDS_REVIEW = "needs review"  # outcome unknown; retry only by hand
 
 
 def skip_reason(session: Session) -> str | None:

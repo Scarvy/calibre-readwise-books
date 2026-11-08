@@ -2,7 +2,14 @@ import json
 
 import pytest
 
-from calibre_bookwise.readwise_api import BASE_URL, ReadOnlyClient, ReadwiseError
+from calibre_bookwise.highlights import HighlightClient
+from calibre_bookwise.readwise_api import (
+    BASE_URL,
+    RateLimited,
+    ReadOnlyClient,
+    ReadwiseError,
+)
+from calibre_bookwise.session_sync import BooksClient
 
 
 class FakeReadwise:
@@ -46,6 +53,26 @@ def test_waits_out_rate_limit_then_retries():
     assert waits == [7.0]
 
 
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({"retry-after": "7"}, 7.0),
+        ({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, 30.0),
+        ({}, 30.0),
+    ],
+)
+def test_rate_limit_wait_tolerates_any_retry_after(headers, expected):
+    waits = []
+    fake = FakeReadwise(
+        (429, headers, {}),
+        (200, {}, {"results": [], "next": None}),
+    )
+
+    ReadOnlyClient("t", fetch=fake, sleep=waits.append).list_books()
+
+    assert waits == [expected]
+
+
 def test_bad_token_gives_a_clear_error():
     fake = FakeReadwise((401, {}, {"error": {"code": "unauthenticated"}}))
 
@@ -64,3 +91,23 @@ def test_client_has_no_way_to_write():
     public = {name for name in dir(ReadOnlyClient) if not name.startswith("_")}
 
     assert public == {"list_books", "list_sessions"}
+
+
+def test_every_client_reports_network_failures_the_same_way():
+    def offline(request):
+        raise OSError("no route to host")
+
+    for send in (
+        lambda: ReadOnlyClient("t", fetch=offline).list_books(),
+        lambda: BooksClient("t", fetch=offline).create_session({}),
+        lambda: HighlightClient("t", fetch=offline).send({"text": "Passage"}),
+    ):
+        with pytest.raises(ReadwiseError, match="Couldn't reach Readwise"):
+            send()
+
+
+def test_write_client_rate_limit_carries_the_delay():
+    client = BooksClient("t", fetch=lambda r: (429, {"Retry-After": "12"}, b""))
+    with pytest.raises(RateLimited) as limited:
+        client.create_session({})
+    assert limited.value.delay == 12.0

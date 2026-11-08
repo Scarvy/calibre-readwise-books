@@ -12,8 +12,12 @@ This repository builds a Calibre GUI plugin that records viewer sessions and opt
 - `src/calibre_bookwise/matching.py`: Calibre to Readwise Books matching and book creation plans.
 - `src/calibre_bookwise/session_sync.py`: session upload state and Readwise Books POSTs.
 - `src/calibre_bookwise/highlights.py`: highlight upload state and Readwise API calls.
+- `src/calibre_bookwise/readwise_api.py`: `ApiClient`, through which every Readwise request goes, and the GET-only `ReadOnlyClient`.
+- `src/calibre_bookwise/book_map.py`: library- and account-scoped Calibre to Readwise book links shared by metadata and session sync. The old unscoped `book_map.json` is left untouched.
+- `src/calibre_bookwise/storage.py` and `locking.py`: atomic JSON writes, and releasing a sync lock around a network call.
+- `src/calibre_bookwise/diagnostics.py`: helpers for `scripts/` only; the build leaves it out of the plugin.
 - `src/calibre_bookwise/metadata.py`: custom column values.
-- `scripts/build_plugin.py`: packages `plugin/` and all shared runtime modules from `src/calibre_bookwise/` into `dist/readwise-books.zip`. Keep diagnostic CLIs in `scripts/` so they are not installed with the plugin.
+- `scripts/build_plugin.py`: packages `plugin/` and all shared runtime modules from `src/calibre_bookwise/`. The default build is marked **DEV** and writes `dist/readwise-books-dev.zip`; `--release` writes the unmarked `dist/readwise-books.zip`. Keep diagnostic CLIs in `scripts/` so they are not installed with the plugin.
 - `logger/` and `scripts/report.py`, `scripts/match_report.py`, and `scripts/sync_dry_run.py`: standalone diagnostics, outside the installed plugin. Run them with `uv run python scripts/<name>.py`.
 
 ## Behavior to preserve
@@ -23,8 +27,10 @@ This repository builds a Calibre GUI plugin that records viewer sessions and opt
 - A session ends on viewer close, a long idle gap, a later session for the same book, or manual end. The default idle limit is five minutes; a focused slow page can extend to the ten minute dwell limit. Sessions shorter than one minute or without usable progress are skipped.
 - Progress uses the viewer cache's chapter lengths when available, with EPUB text lengths as a fallback. Readwise progress is a percentage; opening at that value is approximate.
 - Session uploads are off by default. Enabling automatic uploads affects newly finished sessions; older local sessions need explicit selection. Feed posting is a separate, off by default choice captured when each session is queued. Already queued sessions keep their choice.
-- Readwise Books session POSTs are not deduplicated. Persist `sending` before the request and mark uncertain outcomes `needs review`; never retry those automatically. Preserve `session_uploads.json` across restarts.
+- Readwise Books session POSTs are not deduplicated. Persist `sending` before the request and mark uncertain outcomes `needs review`; never retry those automatically. Only a 401, 403 or 429, where Readwise refused the request outright, is retried automatically. Preserve `session_uploads.json` across restarts.
+- `sessions.jsonl` is the record of finished sessions: the tracker rebuilds `finished_until` from it on start, so a session is never finished, or queued, twice.
 - Highlight uploads are one way from Calibre to Readwise. Baseline existing annotations on first enable, retain upload state in `highlights.json`, and do not reset unreadable state: losing IDs can duplicate uploads. Validation errors require an explicit retry.
+- Saved book links are scoped by Calibre library ID and a hash of the Readwise token. Never reuse an unscoped numeric Calibre book ID from another library or account, or overwrite unreadable link state.
 - Metadata sync uses a GET only client and writes Calibre custom columns. It must not modify Readwise Books.
 
 ## Checks

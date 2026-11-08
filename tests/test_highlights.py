@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -6,9 +7,12 @@ from calibre_bookwise.highlights import (
     HighlightClient,
     HighlightRejected,
     HighlightSync,
+    PreviewCache,
     RateLimited,
+    Waiting,
     preview_highlights,
 )
+from calibre_bookwise.matching import CalibreBook
 from calibre_bookwise.readwise_api import ReadwiseError
 
 
@@ -18,7 +22,7 @@ def setup(tmp_path):
     annots.mkdir()
     now = [100.0]
     sync = HighlightSync(tmp_path / "data", annots, clock=lambda: now[0])
-    books = {"book": {"title": "A book", "authors": ["An Author"]}}
+    books = {"book": CalibreBook(1, "A book", ("An Author",))}
     return sync, annots / "book.json", now, books
 
 
@@ -256,7 +260,7 @@ def test_rejected_highlight_stops_retrying_and_shows_reason(setup):
     sync.poll(books, client)
     assert client.calls == 1
     assert sync.status("book:one") == "rejected"
-    assert "bad note" in sync.explanation("book:one", True)
+    assert "bad note" in sync.explanation("book:one", True).message
     write(path, highlight(notes="Corrected"))
     sync.retry_rejected(["book:one"], books)
     sync.poll(books, FakeClient())
@@ -289,3 +293,80 @@ def test_missing_remote_id_is_not_acknowledged():
     )
     with pytest.raises(ReadwiseError, match="no unique highlight ID"):
         client.send({"text": "Passage"})
+
+
+def test_note_edited_during_upload_keeps_remote_id(setup):
+    sync, path, now, books = setup
+    sync.set_enabled(True)
+    write(path, highlight())
+    sync.poll(books, None)
+    now[0] += 6
+
+    class EditDuringSend(FakeClient):
+        def send(self, payload, remote_id=None):
+            if not self.calls:
+                # Another poll sees the note edit while this request is in flight.
+                write(path, highlight(notes="Edited"))
+                sync.poll(books, None)
+            return super().send(payload, remote_id)
+
+    client = EditDuringSend()
+    sync.poll(books, client)
+    item = sync.state["items"]["book:one"]
+    assert item["remote_id"] == 123
+    assert item["status"] == "pending"
+    now[0] += 6
+    sync.poll(books, client)
+    assert client.calls[-1] == ({"note": "Edited"}, 123)
+    assert len(client.calls) == 2
+
+
+def test_explanation_says_why_a_pending_highlight_waits(setup):
+    sync, path, _now, books = setup
+    write(path, highlight())
+    sync.queue_saved(["book:one"], books)
+
+    assert sync.explanation("book:one", False).waiting == Waiting.TOKEN
+    sync.set_enabled(True)
+    write(path, highlight(), highlight("new"))
+    sync.poll(books, None)
+    assert sync.explanation("book:new", True).waiting == Waiting.SETTLING
+    sync.set_enabled(False)
+    assert sync.explanation("book:new", True).waiting == Waiting.PAUSED
+
+    class Offline:
+        def send(self, payload, remote_id=None):
+            raise ReadwiseError("Couldn't reach Readwise")
+
+    sync.poll(books, Offline())
+    assert sync.explanation("book:one", True) == (
+        "Couldn't reach Readwise",
+        Waiting.RETRY,
+    )
+
+
+def test_summary_counts_statuses_and_lists_distinct_errors(setup):
+    sync, path, _now, books = setup
+    write(path, highlight("one"), highlight("two"), highlight("three"))
+    sync.queue_saved(["book:one", "book:two"], books)
+
+    class Offline:
+        def send(self, payload, remote_id=None):
+            raise ReadwiseError("Couldn't reach Readwise")
+
+    sync.poll(books, Offline())
+    assert sync.enabled is False
+    assert sync.summary() == ({"pending": 2}, ["Couldn't reach Readwise"])
+
+
+def test_preview_cache_rereads_only_when_a_file_or_the_library_changes(setup):
+    _sync, path, _now, books = setup
+    write(path, highlight())
+    cache = PreviewCache(path.parent)
+
+    first = cache.get(books)
+    assert cache.get(books) is first
+    write(path, highlight(), highlight("two"))
+    os.utime(path, ns=(1, 1))  # a new mtime even on coarse clocks
+    assert len(cache.get(books)[0]) == 2
+    assert cache.get(dict(books)) is not cache.get(books)
