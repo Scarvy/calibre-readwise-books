@@ -78,7 +78,17 @@ class FakeReadwise:
             200,
             {},
             json.dumps(
-                {"results": [{"id": 9312, "upload_status": self.upload_status}]}
+                {
+                    "results": [
+                        {
+                            "id": 9312,
+                            "upload_status": self.upload_status,
+                            "book": {"id": 42}
+                            if self.upload_status == "ready"
+                            else None,
+                        }
+                    ]
+                }
             ).encode(),
         )
 
@@ -95,7 +105,7 @@ def test_upload_uses_documented_api_and_only_signed_headers_for_put(tmp_path):
         epub(tmp_path)
     )
     start, put, complete, poll = fake.requests
-    assert upload == {"id": 9312, "upload_status": "ready"}
+    assert upload == {"id": 9312, "upload_status": "ready", "book": {"id": 42}}
     assert json.loads(start.data) == {
         "items": [{"file_name": "A Book.epub", "size": 13}]
     }
@@ -189,5 +199,5 @@ def test_library_status_from_readwise_books():
         LibraryStatus.IN_READWISE,
         LibraryStatus.DELETED,
         LibraryStatus.NOT_IN_READWISE,
-        LibraryStatus.NOT_IN_READWISE,
+        LibraryStatus.LINKED,
     ]

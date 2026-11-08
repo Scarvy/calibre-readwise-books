@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from calibre.gui2 import error_dialog, info_dialog
+from calibre_plugins.readwise_books.book_map import book_map_scope, remember
 from calibre_plugins.readwise_books.ebook_upload import UploadClient, UploadUncertain
 from calibre_plugins.readwise_books.metadata_sync import prefs
 from calibre_plugins.readwise_books.readwise_api import ReadOnlyClient, ReadwiseError
@@ -16,9 +17,9 @@ from qt.core import QThread, pyqtSignal
 class UploadWorker(QThread):
     finished_upload = pyqtSignal(object, object)  # upload record or None, error or None
 
-    def __init__(self, parent, token: str, book_id: int, path: str):
+    def __init__(self, parent, token: str, book_id: int, path: str, scope: str):
         super().__init__(parent)
-        self.token, self.book_id, self.path = token, book_id, path
+        self.token, self.book_id, self.path, self.scope = token, book_id, path, scope
 
     def run(self):
         try:
@@ -51,11 +52,12 @@ class RemoteBooksWorker(QThread):
 
 
 class EpubUploader:
-    def __init__(self, gui):
+    def __init__(self, gui, data_dir: Path):
         self.gui = gui
+        self.data_dir = data_dir
         self._remove_old_sign_in()
         self.worker: UploadWorker | None = None
-        self.listeners: list[Callable[[int, Exception | None], None]] = []
+        self.listeners: list[Callable[[int, str, Exception | None], None]] = []
 
     @property
     def busy(self) -> bool:
@@ -117,16 +119,33 @@ class EpubUploader:
             )
             return
         path = db.format_abspath(book_id, "EPUB")
-        self.worker = UploadWorker(self.gui, token, book_id, path)
+        scope = book_map_scope(self.gui.current_db.library_id, token)
+        self.worker = UploadWorker(self.gui, token, book_id, path, scope)
         self.worker.finished_upload.connect(self._finished)
         self.worker.start()
         self.gui.status_bar.show_message(f"Uploading {Path(path).name} to Readwise…")
 
     def _finished(self, upload, error):
         name = Path(self.worker.path).name if self.worker else "The book"
+        link_error = None
+        if error is None and self.worker is not None and isinstance(upload, dict):
+            book = upload.get("book")
+            if (
+                upload.get("upload_status") == "ready"
+                and isinstance(book, dict)
+                and isinstance(book.get("id"), int)
+            ):
+                try:
+                    remember(
+                        self.data_dir,
+                        self.worker.scope,
+                        {self.worker.book_id: book["id"]},
+                    )
+                except (OSError, ValueError) as save_error:
+                    link_error = save_error
         if self.worker is not None:
             for listener in self.listeners:
-                listener(self.worker.book_id, error)
+                listener(self.worker.book_id, self.worker.scope, error)
         if error is None:
             state = upload.get("upload_status") if isinstance(upload, dict) else None
             message = (
@@ -135,6 +154,14 @@ class EpubUploader:
                 else f"{name} was sent. Readwise is still processing it."
             )
             info_dialog(self.gui, "EPUB uploaded", message, show=True)
+            if link_error is not None:
+                error_dialog(
+                    self.gui,
+                    "Readwise book link not saved",
+                    f"{name} was uploaded, but its Readwise book link was not saved: "
+                    f"{link_error}. Check Readwise before uploading it again.",
+                    show=True,
+                )
         elif isinstance(error, UploadUncertain):
             error_dialog(self.gui, "Upload outcome unknown", str(error), show=True)
         else:

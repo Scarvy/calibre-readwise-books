@@ -141,7 +141,7 @@ class ReadwiseBooksAction(InterfaceAction):
             self.metadata_sync.open_selected_at_readwise_progress,
         )
         position_action.setIcon(QIcon.ic("view.png"))
-        self.epub_uploader = EpubUploader(self.gui)
+        self.epub_uploader = EpubUploader(self.gui, DATA_DIR)
         upload_action = menu.addAction(
             "Upload selected EPUB to Readwise Books…",
             self.epub_uploader.upload_selected,
@@ -918,6 +918,8 @@ class EbooksPanel(SyncPanel):
         self.checked_at = ""
         self.fetch_error = ""
         self.fetcher: RemoteBooksWorker | None = None
+        self.remote_scope: str | None = None
+        self.fetch_scope: str | None = None
         self.processing: set[int] = set()  # uploaded, not in Readwise's list yet
         self.status_label = QLabel(self)
         self.filter = QComboBox(self)
@@ -946,10 +948,26 @@ class EbooksPanel(SyncPanel):
 
     def refresh(self):
         """Called on every poll: fetch once, otherwise leave the table be."""
+        self._ensure_scope()
         if self.remote is None and self.fetcher is None and not self.fetch_error:
             self.fetch()
 
+    def _scope(self) -> str:
+        return book_map_scope(
+            self.action.gui.current_db.library_id, prefs.get("token", "")
+        )
+
+    def _ensure_scope(self):
+        scope = self._scope()
+        if scope != self.remote_scope:
+            self.remote_scope = scope
+            self.remote = None
+            self.fetch_error = ""
+            self.checked_at = ""
+            self.processing.clear()
+
     def fetch(self):
+        self._ensure_scope()
         if self.fetcher is not None:
             return
         token = prefs.get("token", "")
@@ -961,12 +979,17 @@ class EbooksPanel(SyncPanel):
             return
         self.fetch_error = ""
         self.status_label.setText("Checking your Readwise Books library…")
+        self.fetch_scope = self.remote_scope
         self.fetcher = RemoteBooksWorker(self, token)
         self.fetcher.finished_fetch.connect(self.fetched)
         self.fetcher.start()
 
     def fetched(self, books, error):
         self.fetcher = None
+        if self.fetch_scope != self._scope():
+            self._ensure_scope()
+            self.fetch()
+            return
         if error is None:
             self.remote = books
             self.checked_at = time.strftime("%H:%M")
@@ -975,6 +998,7 @@ class EbooksPanel(SyncPanel):
         self.reload()
 
     def reload(self):
+        self._ensure_scope()
         db = self.action.gui.current_db.new_api
         books = [
             calibre_book_from_db(db, book_id)
@@ -982,11 +1006,8 @@ class EbooksPanel(SyncPanel):
             if db.has_format(book_id, "EPUB")
         ]
         books.sort(key=lambda book: book.title.casefold())
-        scope = book_map_scope(
-            self.action.gui.current_db.library_id, prefs.get("token", "")
-        )
         try:
-            saved = read_book_map(DATA_DIR, scope)
+            saved = read_book_map(DATA_DIR, self._scope())
         except ValueError as error:
             self.status_label.setText(str(error))
             return
@@ -1023,7 +1044,12 @@ class EbooksPanel(SyncPanel):
             rows = [
                 r
                 for r in rows
-                if r["status"] in (LibraryStatus.UPLOADED, LibraryStatus.IN_READWISE)
+                if r["status"]
+                in (
+                    LibraryStatus.UPLOADED,
+                    LibraryStatus.IN_READWISE,
+                    LibraryStatus.LINKED,
+                )
             ]
         values = [
             (
@@ -1093,10 +1119,13 @@ class EbooksPanel(SyncPanel):
     def send_all(self):
         pass  # hidden: uploads go one book at a time
 
-    def upload_finished(self, book_id: int, error: Exception | None):
+    def upload_finished(self, book_id: int, scope: str, error: Exception | None):
+        if scope != self._scope():
+            return
         if error is None:
             self.processing.add(book_id)
             QTimer.singleShot(self.RECHECK_MS, self.fetch)
+            self.fetch()
         self.reload()
 
 

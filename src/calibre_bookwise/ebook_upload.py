@@ -22,14 +22,17 @@ class LibraryStatus(StrEnum):
 
     UPLOADED = "uploaded ebook"
     IN_READWISE = "in Readwise"
+    LINKED = "linked in Readwise (not listed yet)"
     DELETED = "deleted in Readwise"
     NOT_IN_READWISE = "not in Readwise"
 
 
 def library_status(match: Match) -> LibraryStatus:
     remote = match.bookwise
-    if match.bookwise_id is None or not remote:
+    if match.bookwise_id is None:
         return LibraryStatus.NOT_IN_READWISE
+    if not remote:
+        return LibraryStatus.LINKED
     if remote.get("status") == "deleted":
         return LibraryStatus.DELETED
     if remote.get("creation_origin") == "uploaded_ebook":

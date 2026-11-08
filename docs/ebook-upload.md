@@ -9,6 +9,8 @@ The worker thread follows the documented flow:
 3. `POST /books/api/v1/uploads/complete` with the upload id and `currently_reading` shelf, matching the earlier uploader's behavior. Readwise processes the book asynchronously.
 4. Poll `GET /books/api/v1/uploads?ids=<id>` for up to a minute. A ready result includes the created book. If it is still processing, the UI reports that state and refreshes the EPUBs tab later.
 
+When a ready result includes a book id, the plugin saves that exact Calibre-to-Readwise link for the current Calibre library and Readwise token. The EPUBs tab can then recognize the upload even if Readwise's title or author differs from Calibre's metadata.
+
 Readwise accepts EPUB files up to 500,000,000 bytes and limits upload starts to 10 per hour. The plugin does not automatically retry a failed completion request, since its outcome may be unknown. The error gives the upload id so the user can check Readwise before starting another upload.
 
 The EPUBs tab lists each Calibre book with an EPUB and compares it with the Readwise Books library. It uses `list_books` and saved book links to show whether the book is an uploaded ebook, another Readwise book, deleted, or absent. A completed upload may take time to appear in that list.
