@@ -2,7 +2,7 @@
 
 Polls the e-book viewer's saved positions every few seconds (see live.py)
 and shows recorded sessions with the Bookwise payload each would send.
-Reading sessions stay local. Highlight uploads are separately opt-in.
+Session and highlight uploads are separately opt-in.
 """
 
 import hashlib

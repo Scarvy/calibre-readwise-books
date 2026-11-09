@@ -111,3 +111,23 @@ def test_write_client_rate_limit_carries_the_delay():
     with pytest.raises(RateLimited) as limited:
         client.create_session({})
     assert limited.value.delay == 12.0
+
+
+@pytest.mark.parametrize("value", ["inf", "-inf", "NaN"])
+def test_nonfinite_retry_after_uses_default(value):
+    fake = FakeReadwise(
+        (429, {"Retry-After": value}, {}),
+        (200, {}, {"results": [], "next": None}),
+    )
+    waits = []
+    ReadOnlyClient("t", fetch=fake, sleep=waits.append).list_books()
+    assert waits == [30.0]
+
+
+def test_exhausted_retries_do_not_sleep_after_last_attempt():
+    fake = FakeReadwise(*[(429, {"Retry-After": "1"}, {})] * 4)
+    waits = []
+    with pytest.raises(ReadwiseError, match="kept rate-limiting"):
+        ReadOnlyClient("t", fetch=fake, sleep=waits.append).list_books()
+    assert len(fake.requests) == 4
+    assert waits == [1.0, 1.0, 1.0]

@@ -1,5 +1,6 @@
 """Opt-in upload of finished Calibre reading sessions to Readwise Books."""
 
+import copy
 import hashlib
 import json
 import threading
@@ -194,6 +195,7 @@ class SessionSync:
         if mode not in tuple(SessionMode):
             raise ValueError("Invalid session mode")
         with self.lock:
+            previous = copy.deepcopy(self.state)
             # Anything already recorded before the mode change stays local.
             self.state["mode"] = SessionMode.DRY_RUN
             self._register(records)
@@ -202,7 +204,11 @@ class SessionSync:
                     if item["status"] == SessionStatus.PENDING:
                         item["status"] = SessionStatus.LOCAL
             self.state["mode"] = mode
-            self._save()
+            try:
+                self._save()
+            except OSError:
+                self.state = previous
+                raise
 
     def status(self, record: dict) -> dict:
         with self.lock:

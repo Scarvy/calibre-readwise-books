@@ -80,7 +80,8 @@ def book_values(match: Match, sessions: list[dict]) -> dict[str, object]:
     progress = book.get("progress")
     seconds = sum(s.get("total_time_seconds") or 0 for s in sessions)
     last_read = max(
-        (s["ended_at"] for s in sessions if s.get("ended_at")), default=None
+        (datetime.fromisoformat(s["ended_at"]) for s in sessions if s.get("ended_at")),
+        default=None,
     )
     return {
         "rw_status": STATUS_NAMES.get(book.get("status") or "", book.get("status")),
@@ -92,7 +93,7 @@ def book_values(match: Match, sessions: list[dict]) -> dict[str, object]:
         "rw_progress": round(progress * 100, 1) if progress is not None else None,
         "rw_minutes": round(seconds / 60) if sessions else None,
         "rw_sessions": len(sessions) or None,
-        "rw_last_read": _date(last_read),
+        "rw_last_read": last_read,
         "rw_pages": product.get("page_count") or None,
         "rw_words": product.get("word_count") or None,
     }
