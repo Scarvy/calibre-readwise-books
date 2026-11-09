@@ -339,3 +339,21 @@ def test_refused_book_creation_is_retried_not_held_for_review(tmp_path):
     sync.poll([entry], BOOKS, RefusingBookClient(remote_books=[]), SCOPE)
     assert sync.status(entry)["status"] == "pending"
     assert sync.state["retry_at"] > 0
+
+
+def test_failed_mode_change_restores_pending_sessions(tmp_path, monkeypatch):
+    entry = record()
+    sync = SessionSync(tmp_path, [])
+    sync.set_mode("send", [])
+    sync.poll([entry], BOOKS, None, SCOPE)
+    original = sync.path.read_text()
+
+    def fail_save():
+        raise OSError("disk full")
+
+    monkeypatch.setattr(sync, "_save", fail_save)
+    with pytest.raises(OSError):
+        sync.set_mode("dry_run", [entry])
+    assert sync.sending
+    assert sync.status(entry)["status"] == "pending"
+    assert sync.path.read_text() == original

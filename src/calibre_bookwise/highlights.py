@@ -5,6 +5,7 @@ Persist intent before any network IO.
 Only this module's uploaded highlights can have their notes updated; no deletes.
 """
 
+import copy
 import json
 import threading
 import time
@@ -259,6 +260,7 @@ class HighlightSync:
 
     def set_enabled(self, enabled: bool):
         with self.lock:
+            previous = copy.deepcopy(self.state)
             if enabled:
                 # Read ALL files before changing state: a failed baseline aborts enable.
                 seen = set(self.state["seen"])
@@ -268,7 +270,11 @@ class HighlightSync:
                             seen.add(highlight_key(path.stem, a["uuid"]))
                 self.state["seen"] = sorted(seen)
             self.state["enabled"] = enabled
-            self._save()
+            try:
+                self._save()
+            except OSError:
+                self.state = previous
+                raise
 
     def status(self, key: str | None) -> str:
         if key is None:
@@ -327,6 +333,7 @@ class HighlightSync:
             seen = set(self.state["seen"])
             for key in keys:
                 self.state["items"][key] = {
+                    **self.state["items"].get(key, {}),
                     "payload": available[key]["payload"],
                     "status": HighlightStatus.PENDING,
                     "ready_at": now,
@@ -377,12 +384,20 @@ class HighlightSync:
                         or item.get("payload") != payload
                         or item.get("status") == HighlightStatus.INVALID
                     ):
+                        rejected = (
+                            item is not None
+                            and item.get("status") == HighlightStatus.REJECTED
+                        )
                         items[key] = {
                             **(item or {}),
                             "payload": payload,
-                            "status": HighlightStatus.PENDING,
+                            "status": (
+                                HighlightStatus.REJECTED
+                                if rejected
+                                else HighlightStatus.PENDING
+                            ),
                             "ready_at": now + SETTLE_SECONDS,
-                            "error": "",
+                            "error": (item or {}).get("error", "") if rejected else "",
                         }
             if self.state["enabled"]:
                 self.state["seen"] = sorted(seen)

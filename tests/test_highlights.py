@@ -370,3 +370,66 @@ def test_preview_cache_rereads_only_when_a_file_or_the_library_changes(setup):
     os.utime(path, ns=(1, 1))  # a new mtime even on coarse clocks
     assert len(cache.get(books)[0]) == 2
     assert cache.get(dict(books)) is not cache.get(books)
+
+
+def test_retry_rejected_note_keeps_remote_id(setup):
+    sync, path, now, books = setup
+    sync.set_enabled(True)
+    write(path, highlight())
+    sync.poll(books, None)
+    now[0] += 6
+    sync.poll(books, FakeClient())
+    write(path, highlight(notes="New note"))
+    sync.poll(books, None)
+    now[0] += 6
+
+    class RejectNote:
+        def send(self, payload, remote_id=None):
+            raise HighlightRejected("Bad note", 400)
+
+    sync.poll(books, RejectNote())
+    sync.retry_rejected(["book:one"], books)
+    client = FakeClient()
+    sync.poll(books, client)
+    assert client.calls == [({"note": "New note"}, 123)]
+
+
+def test_failed_enable_restores_memory_and_disk(setup, monkeypatch):
+    sync, path, _now, _books = setup
+    sync.set_enabled(False)
+    original = sync.path.read_text()
+    write(path, highlight())
+
+    def fail_save():
+        raise OSError("disk full")
+
+    monkeypatch.setattr(sync, "_save", fail_save)
+    with pytest.raises(OSError):
+        sync.set_enabled(True)
+    assert not sync.enabled
+    assert sync.state["seen"] == []
+    assert sync.path.read_text() == original
+
+
+def test_editing_rejected_highlight_still_requires_explicit_retry(setup):
+    sync, path, now, books = setup
+    sync.set_enabled(True)
+    write(path, highlight())
+    sync.poll(books, None)
+    now[0] += 6
+
+    class Reject:
+        def send(self, payload, remote_id=None):
+            raise HighlightRejected("Invalid text", 400)
+
+    sync.poll(books, Reject())
+    write(path, highlight(notes="Corrected"))
+    sync.poll(books, None)
+    now[0] += 6
+    client = FakeClient()
+    sync.poll(books, client)
+    assert client.calls == []
+    assert sync.status("book:one") == "rejected"
+    sync.retry_rejected(["book:one"], books)
+    sync.poll(books, client)
+    assert len(client.calls) == 1

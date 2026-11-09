@@ -12,6 +12,7 @@ Stdlib only: this has to run inside Calibre's bundled Python 3.11.
 """
 
 import json
+import math
 import time
 import urllib.error
 import urllib.parse
@@ -110,10 +111,12 @@ class ReadOnlyClient(ApiClient):
     def _get(self, url: str) -> dict:
         if not url.startswith(BASE_URL):
             raise ReadwiseError(f"Refusing to follow a link outside Readwise: {url}")
-        for _ in range(MAX_RETRIES + 1):
+        for attempt in range(MAX_RETRIES + 1):
             try:
                 return json.loads(self._request("GET", url))
             except RateLimited as limited:
+                if attempt == MAX_RETRIES:
+                    break
                 self.sleep(limited.delay)
         raise ReadwiseError("Readwise kept rate-limiting the request; try again later.")
 
@@ -123,7 +126,8 @@ def retry_after(headers: dict, default: float) -> float:
     for name, value in headers.items():
         if name.lower() == "retry-after":
             try:
-                return max(1.0, float(value))
+                seconds = float(value)
+                return max(1.0, seconds) if math.isfinite(seconds) else default
             except (TypeError, ValueError):
                 break
     return default

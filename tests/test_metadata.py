@@ -70,3 +70,15 @@ def test_status_values_are_all_allowed_by_the_column():
     )
 
     assert set(updates["rw_status"].values()) <= set(status.display["enum_values"])
+
+
+def test_last_read_compares_instants_across_timezone_offsets():
+    book = CalibreBook(
+        11, "Design for Developers", ("Stephanie Stimac",), "9781617299476"
+    )
+    sessions = [
+        {"book_id": 888611, "ended_at": "2026-10-30T00:30:00+02:00"},
+        {"book_id": 888611, "ended_at": "2026-10-29T23:00:00Z"},
+    ]
+    updates = column_updates(plan_matches([book], [DESIGN]), sessions)
+    assert updates["rw_last_read"][11] == datetime(2026, 10, 29, 23, tzinfo=UTC)
